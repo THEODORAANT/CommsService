@@ -85,10 +85,10 @@ export async function processWebhookBatch(limit = 50) {
 
         // mysql2 returns OkPacket differently; easiest is to just re-read and ensure it's locked by us
         const dRows = await q<any>(
-            `SELECT d.*, s.url, s.secret
-       FROM webhook_deliveries d
-       JOIN webhook_subscriptions s ON s.subscription_id=d.subscription_id
-       WHERE d.delivery_id=:delivery_id`,
+            `SELECT d.*, s.url, s.secret, s.subscriber_system
+FROM webhook_deliveries d
+JOIN webhook_subscriptions s ON s.subscription_id=d.subscription_id
+WHERE d.delivery_id=:delivery_id`,
             { delivery_id }
         );
         if (!dRows.length) continue;
@@ -101,19 +101,29 @@ export async function processWebhookBatch(limit = 50) {
         let errText: string | null = null;
 
         try {
-            const resp = await fetch(d.url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-Event-Id": d.event_id,
-                    "X-Event-Type": d.event_type,
-                    "X-Event-Timestamp": new Date().toISOString(),
-                    "X-Signature": `sha256=${sig}`
-                },
-                body: rawBody
-            });
-            ok = resp.ok;
-            if (!ok) errText = `HTTP ${resp.status}`;
+            if (d.subscriber_system === "pharmacy") {
+                // Build Pharmacy payload { email, note }
+                const pharmacyPayload = await buildPharmacyCustomerNotePayload(d.tenant_id, payloadObj);
+
+                // Optional filter: push only admin_note
+                const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
+                if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
+                    ok = true; // treat as success (intentionally skipped)
+                } else {
+                    const resp = await fetch(d.url, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Event-Id": d.event_id,
+                            "X-Event-Type": d.event_type,
+                            "X-Event-Timestamp": new Date().toISOString(),
+                            "X-Signature": `sha256=${sig}`
+                        },
+                        body: rawBody
+                    });
+                    ok = resp.ok;
+                    if (!ok) errText = `HTTP ${resp.status}`;
+                }
         } catch (e: any) {
             ok = false;
             errText = e?.message || "network error";
@@ -145,4 +155,63 @@ export async function processWebhookBatch(limit = 50) {
     }
 
     return { processed: due.length };
+}
+async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: any) {
+    if (payloadObj.event_type !== "note.created") {
+        const err: any = new Error("Unsupported pharmacy event type");
+        err.status = 400;
+        throw err;
+    }
+
+    const note_id = payloadObj?.data?.note_id;
+    const memberID = payloadObj?.data?.memberID;
+    const orderID = payloadObj?.data?.orderID ?? null;
+    const scope = payloadObj?.data?.scope;
+
+    if (!note_id || !memberID) {
+        const err: any = new Error("Missing note_id/memberID in event data");
+        err.status = 400;
+        throw err;
+    }
+
+    // Get member email
+    const memRows = await q<any>(
+        `SELECT email FROM members WHERE tenant_id=:tenant_id AND memberID=:memberID`,
+        { tenant_id, memberID }
+    );
+
+    const email = memRows?.[0]?.email;
+    if (!email) {
+        const err: any = new Error(`Missing email for memberID=${memberID}. Link member with email first.`);
+        err.status = 422;
+        throw err;
+    }
+
+    // Get full note details
+    const noteRows = await q<any>(
+        `SELECT note_type, title, body, created_by_role, created_by_display_name, created_at
+     FROM notes
+     WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+        { tenant_id, note_id }
+    );
+
+    if (!noteRows.length) {
+        const err: any = new Error("Note not found for note_id");
+        err.status = 404;
+        throw err;
+    }
+
+    const n = noteRows[0];
+
+    // Compose note text for Pharmacy
+    const headerParts = [
+        `[CommsService note_id=${note_id} scope=${scope} memberID=${memberID}${orderID ? ` orderID=${orderID}` : ""}]`,
+        `[from=${n.created_by_role}${n.created_by_display_name ? `:${n.created_by_display_name}` : ""}]`
+    ];
+
+    if (n.title) headerParts.push(`[title=${n.title}]`);
+
+    const composed = `${headerParts.join(" ")}\n${n.body}`;
+
+    return { email, note: composed, note_type: n.note_type };
 }

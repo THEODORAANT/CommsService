@@ -24,3 +24,19 @@ curl -X POST "https://comms.example.com/v1/internal/process-webhooks?limit=100" 
 Link orders before order-scoped notes:
 POST /v1/perch/orders/{orderID}/link
 { "memberID": 376, "status": "paid" }
+PHARMACY_PUSH_NOTES: enable/disable pushing notes to Pharmacy
+
+PHARMACY_ONLY_ADMIN_NOTES: if true, only push admin_note (typical requirement)
+node -e "
+const jwt=require('jsonwebtoken');
+console.log(jwt.sign(
+{
+tenant_id:'gwl-cy',
+actor:{role:'admin',user_id:'cli',display_name:'CLI'},
+iss:'perch',
+aud:'comms-service'
+},
+'jwtgrtts',
+{ algorithm:'HS256', expiresIn:'1h' }
+));
+"
