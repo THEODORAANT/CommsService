@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 import { q } from "../db.js";
@@ -7,6 +7,12 @@ import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
 
 export const perchMembers = Router();
+
+const authedHandler =
+    (handler: (req: AuthedRequest, res: Response) => Promise<void> | void) =>
+    (req: Request, res: Response, next: NextFunction) => {
+        Promise.resolve(handler(req as AuthedRequest, res)).catch(next);
+    };
 
 const ActorSchema = z.object({
     role: z.enum(["admin","pharmacist","patient","system"]),
@@ -38,10 +44,12 @@ const MemberLinkSchema = z.object({
     pharmacy_patient_ref: z.string().optional().nullable()
 });
 
-perchMembers.post("/v1/perch/members/:memberID/link", async (req: AuthedRequest, res) => {
-    const tenant_id = req.tenant_id;
-    const memberID = Number(req.params.memberID);
-    const body = MemberLinkSchema.parse(req.body);
+perchMembers.post(
+    "/v1/perch/members/:memberID/link",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const memberID = Number(req.params.memberID);
+        const body = MemberLinkSchema.parse(req.body);
 
     await q(
         `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
@@ -56,14 +64,17 @@ perchMembers.post("/v1/perch/members/:memberID/link", async (req: AuthedRequest,
         { tenant_id, memberID, ...body }
     );
 
-    await emitEvent(tenant_id, "member.link.updated", { memberID });
-    res.json({ ok: true });
-});
+        await emitEvent(tenant_id, "member.link.updated", { memberID });
+        res.json({ ok: true });
+    })
+);
 
-perchMembers.get("/v1/perch/members/:memberID/notes", async (req: AuthedRequest, res) => {
-    const tenant_id = req.tenant_id;
-    const memberID = Number(req.params.memberID);
-    const scope = (req.query.scope as string) || "patient";
+perchMembers.get(
+    "/v1/perch/members/:memberID/notes",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const memberID = Number(req.params.memberID);
+        const scope = (req.query.scope as string) || "patient";
 
     const notes = await q<any>(
         `SELECT * FROM notes
@@ -95,13 +106,16 @@ perchMembers.get("/v1/perch/members/:memberID/notes", async (req: AuthedRequest,
         repliesBy.set(r.note_id, arr);
     }
 
-    res.json({ items: notes.map((n: any) => ({ ...n, replies: repliesBy.get(n.note_id) || [] })), next_cursor: null });
-});
+        res.json({ items: notes.map((n: any) => ({ ...n, replies: repliesBy.get(n.note_id) || [] })), next_cursor: null });
+    })
+);
 
-perchMembers.post("/v1/perch/members/:memberID/notes", async (req: AuthedRequest, res) => {
-    const tenant_id = req.tenant_id;
-    const memberID = Number(req.params.memberID);
-    const idem = req.header("Idempotency-Key") || undefined;
+perchMembers.post(
+    "/v1/perch/members/:memberID/notes",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const memberID = Number(req.params.memberID);
+        const idem = req.header("Idempotency-Key") || undefined;
 
     const body = NoteCreateSchema.parse(req.body);
     const endpoint = "/v1/perch/members/:memberID/notes";
@@ -147,14 +161,17 @@ perchMembers.post("/v1/perch/members/:memberID/notes", async (req: AuthedRequest
         return { note_id, thread_root_id: note_id, scope: "patient", memberID, orderID: null, note_type: body.note_type, status, created_at: new Date().toISOString() };
     });
 
-    res.setHeader("X-Idempotency-Replayed", String(replayed));
-    res.status(201).json(result);
-});
+        res.setHeader("X-Idempotency-Replayed", String(replayed));
+        res.status(201).json(result);
+    })
+);
 
-perchMembers.get("/v1/perch/members/:memberID/messages", async (req: AuthedRequest, res) => {
-    const tenant_id = req.tenant_id;
-    const memberID = Number(req.params.memberID);
-    const channel = (req.query.channel as string) || "all";
+perchMembers.get(
+    "/v1/perch/members/:memberID/messages",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const memberID = Number(req.params.memberID);
+        const channel = (req.query.channel as string) || "all";
 
     const items = await q<any>(
         `SELECT * FROM messages
@@ -165,13 +182,16 @@ perchMembers.get("/v1/perch/members/:memberID/messages", async (req: AuthedReque
         { tenant_id, memberID, channel }
     );
 
-    res.json({ items, next_cursor: null });
-});
+        res.json({ items, next_cursor: null });
+    })
+);
 
-perchMembers.post("/v1/perch/members/:memberID/messages", async (req: AuthedRequest, res) => {
-    const tenant_id = req.tenant_id;
-    const memberID = Number(req.params.memberID);
-    const idem = req.header("Idempotency-Key") || undefined;
+perchMembers.post(
+    "/v1/perch/members/:memberID/messages",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const memberID = Number(req.params.memberID);
+        const idem = req.header("Idempotency-Key") || undefined;
 
     const body = MessageCreateSchema.parse(req.body);
     const endpoint = "/v1/perch/members/:memberID/messages";
@@ -211,6 +231,7 @@ perchMembers.post("/v1/perch/members/:memberID/messages", async (req: AuthedRequ
         return { message_id, memberID, channel: body.channel, created_at: new Date().toISOString() };
     });
 
-    res.setHeader("X-Idempotency-Replayed", String(replayed));
-    res.status(201).json(result);
-});
+        res.setHeader("X-Idempotency-Replayed", String(replayed));
+        res.status(201).json(result);
+    })
+);
