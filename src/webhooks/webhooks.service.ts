@@ -94,7 +94,8 @@ WHERE d.delivery_id=:delivery_id`,
         if (!dRows.length) continue;
         const d = dRows[0];
 
-        const rawBody = JSON.stringify(JSON.parse(d.payload));
+        const payloadObj = JSON.parse(d.payload);
+        const rawBody = JSON.stringify(payloadObj);
         const sig = signWebhook(d.secret, rawBody);
 
         let ok = false;
@@ -119,11 +120,26 @@ WHERE d.delivery_id=:delivery_id`,
                             "X-Event-Timestamp": new Date().toISOString(),
                             "X-Signature": `sha256=${sig}`
                         },
-                        body: rawBody
+                        body: JSON.stringify(pharmacyPayload)
                     });
                     ok = resp.ok;
                     if (!ok) errText = `HTTP ${resp.status}`;
                 }
+            } else {
+                const resp = await fetch(d.url, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Event-Id": d.event_id,
+                        "X-Event-Type": d.event_type,
+                        "X-Event-Timestamp": new Date().toISOString(),
+                        "X-Signature": `sha256=${sig}`
+                    },
+                    body: rawBody
+                });
+                ok = resp.ok;
+                if (!ok) errText = `HTTP ${resp.status}`;
+            }
         } catch (e: any) {
             ok = false;
             errText = e?.message || "network error";
