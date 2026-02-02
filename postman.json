@@ -1,0 +1,362 @@
+{
+  "info": {
+    "_postman_id": "9edb3c3c-2c7d-4d13-9e0a-7d3ff7d7d3b1",
+    "name": "Comms Service (Perch ↔ Pharmacy) - MySQL (No Redis)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "REST endpoints for Comms Service (notes + threaded replies + chat) keyed by memberID and orderID. Uses Bearer JWT auth."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "tenantId", "value": "gwl-cy" },
+    { "key": "jwt", "value": "PASTE_JWT_HERE" },
+    { "key": "workerKey", "value": "PASTE_INTERNAL_WORKER_KEY_HERE" },
+    { "key": "memberID", "value": "376" },
+    { "key": "orderID", "value": "725" },
+    { "key": "note_id", "value": "PASTE_NOTE_UUID_HERE" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal (No JWT)",
+      "item": [
+        {
+          "name": "POST /v1/internal/process-webhooks?limit=50",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Worker-Key", "value": "{{workerKey}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/internal/process-webhooks?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "internal", "process-webhooks"],
+              "query": [{ "key": "limit", "value": "50" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth Helper",
+      "item": [
+        {
+          "name": "NOTE: Set Authorization token",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "This is just to ensure your environment vars are set. All /v1/* endpoints require Authorization: Bearer {{jwt}}."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Members (Perch keys)",
+      "item": [
+        {
+          "name": "POST /v1/perch/members/:memberID/link",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/link",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "link"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"patient@example.com\",\n  \"first_name\": \"Test\",\n  \"last_name\": \"Patient\",\n  \"phone\": \"+35700000000\",\n  \"pharmacy_patient_ref\": \"PHARM-12345\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /v1/perch/members/:memberID/notes?scope=patient",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/notes?scope=patient",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "notes"],
+              "query": [{ "key": "scope", "value": "patient" }]
+            }
+          }
+        },
+        {
+          "name": "POST /v1/perch/members/:memberID/notes (patient note)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/notes",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "notes"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note_type\": \"clinical_note\",\n  \"title\": \"Patient-level note\",\n  \"body\": \"Clinical follow-up note for patient.\",\n  \"created_by\": {\n    \"role\": \"pharmacist\",\n    \"user_id\": \"pharm_u123\",\n    \"display_name\": \"Dr Pharmacist\"\n  }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const json = pm.response.json();",
+                  "  if (json && json.note_id) pm.collectionVariables.set('note_id', json.note_id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Orders (Perch keys)",
+      "item": [
+        {
+          "name": "POST /v1/perch/orders/:orderID/link",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/orders/{{orderID}}/link",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "orders", "{{orderID}}", "link"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"memberID\": {{memberID}},\n  \"pharmacy_order_ref\": \"RX-777\",\n  \"status\": \"payment_received\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /v1/perch/orders/:orderID/notes",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/orders/{{orderID}}/notes",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "orders", "{{orderID}}", "notes"]
+            }
+          }
+        },
+        {
+          "name": "POST /v1/perch/orders/:orderID/notes (order note)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/orders/{{orderID}}/notes",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "orders", "{{orderID}}", "notes"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note_type\": \"admin_note\",\n  \"title\": \"Order logistics\",\n  \"body\": \"Address clarification required before dispatch.\",\n  \"created_by\": {\n    \"role\": \"admin\",\n    \"user_id\": \"admin_u1\",\n    \"display_name\": \"Perch Admin\"\n  }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "try {",
+                  "  const json = pm.response.json();",
+                  "  if (json && json.note_id) pm.collectionVariables.set('note_id', json.note_id);",
+                  "} catch (e) {}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Notes (Threaded Replies)",
+      "item": [
+        {
+          "name": "POST /v1/notes/:note_id/replies",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/notes/{{note_id}}/replies",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "notes", "{{note_id}}", "replies"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Replying in-thread to the note.\",\n  \"created_by\": {\n    \"role\": \"pharmacist\",\n    \"user_id\": \"pharm_u123\",\n    \"display_name\": \"Dr Pharmacist\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat (3-way visibility)",
+      "item": [
+        {
+          "name": "GET /v1/perch/members/:memberID/messages?channel=all",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/messages?channel=all",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "messages"],
+              "query": [{ "key": "channel", "value": "all" }]
+            }
+          }
+        },
+        {
+          "name": "POST /v1/perch/members/:memberID/messages (admin→patient)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "messages"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channel\": \"admin_patient\",\n  \"body\": \"Hi, can you confirm your delivery address?\",\n  \"sender\": {\n    \"role\": \"admin\",\n    \"user_id\": \"admin_u1\",\n    \"display_name\": \"Perch Admin\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /v1/perch/members/:memberID/messages (pharmacist→patient)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt}}", "type": "text" },
+              { "key": "X-Tenant-Id", "value": "{{tenantId}}", "type": "text" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/perch/members/{{memberID}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "perch", "members", "{{memberID}}", "messages"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channel\": \"pharmacist_patient\",\n  \"body\": \"Please confirm current weight and any side effects.\",\n  \"sender\": {\n    \"role\": \"pharmacist\",\n    \"user_id\": \"pharm_u123\",\n    \"display_name\": \"Dr Pharmacist\"\n  }\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook Receiver (Pharmacy-side example)",
+      "item": [
+        {
+          "name": "POST /webhooks/comms (example payload)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "X-Event-Id", "value": "{{$guid}}", "type": "text" },
+              { "key": "X-Event-Type", "value": "note.reply.created", "type": "text" },
+              { "key": "X-Event-Timestamp", "value": "2026-01-29T10:00:00.000Z", "type": "text" },
+              { "key": "X-Signature", "value": "sha256=<computed_hmac_here>", "type": "text" }
+            ],
+            "url": {
+              "raw": "https://pharmacy.example.com/webhooks/comms",
+              "host": ["https://pharmacy.example.com"],
+              "path": ["webhooks", "comms"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event_id\": \"{{$guid}}\",\n  \"event_type\": \"note.reply.created\",\n  \"occurred_at\": \"2026-01-29T10:00:00.000Z\",\n  \"tenant_id\": \"gwl-cy\",\n  \"data\": {\n    \"note_id\": \"{{note_id}}\",\n    \"note_reply_id\": \"{{$guid}}\",\n    \"memberID\": {{memberID}},\n    \"orderID\": {{orderID}}\n  }\n}"
+            },
+            "description": "This request is NOT sent to the Comms Service. It’s an example of what Comms Service will POST to Pharmacy's webhook endpoint."
+          }
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Optional: auto-attach auth headers if missing (keeps requests simple).",
+          "const needsAuth = pm.request.url.toString().includes('/v1/') && !pm.request.url.toString().includes('/v1/internal/');",
+          "if (needsAuth) {",
+          "  const hasAuth = pm.request.headers.has('Authorization');",
+          "  if (!hasAuth) pm.request.headers.add({ key: 'Authorization', value: 'Bearer ' + pm.collectionVariables.get('jwt') });",
+          "  if (!pm.request.headers.has('X-Tenant-Id')) pm.request.headers.add({ key: 'X-Tenant-Id', value: pm.collectionVariables.get('tenantId') });",
+          "}"
+        ]
+      }
+    }
+  ]
+}
