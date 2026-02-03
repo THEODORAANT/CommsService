@@ -15,7 +15,9 @@ export async function emitEvent(tenant_id: string, event_type: string, data: any
     );
 
     for (const s of subs) {
-        const eventTypes: string[] = JSON.parse(s.event_types);
+        const eventTypes: string[] = Array.isArray(s.event_types)
+            ? s.event_types
+            : JSON.parse(s.event_types);
         if (!eventTypes.includes(event_type)) continue;
 
         const event_id = crypto.randomUUID();
