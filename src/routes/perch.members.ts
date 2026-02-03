@@ -38,6 +38,7 @@ const MessageCreateSchema = z.object({
 
 const MemberLinkSchema = z.object({
     email: z.string().email().optional().nullable(),
+    memberEmail: z.string().email().optional().nullable(),
     first_name: z.string().optional().nullable(),
     last_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
@@ -54,19 +55,28 @@ perchMembers.post(
         const memberID = Number(req.params.memberID);
         console.log("memberID :", memberID);
         const body = MemberLinkSchema.parse(req.body);
+        const email = body.email ?? body.memberEmail ?? null;
 
-    await q(
-        `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
+        await q(
+            `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
      VALUES (:tenant_id, :memberID, :email, :first_name, :last_name, :phone, :pharmacy_patient_ref)
      ON DUPLICATE KEY UPDATE
-       email = COALESCE(VALUES(email), memberEmail),
+       email = COALESCE(VALUES(email), email),
        first_name = COALESCE(VALUES(first_name), first_name),
        last_name = COALESCE(VALUES(last_name), last_name),
        phone = COALESCE(VALUES(phone), phone),
        pharmacy_patient_ref = COALESCE(VALUES(pharmacy_patient_ref), pharmacy_patient_ref),
        updated_at = CURRENT_TIMESTAMP(3)`,
-        { tenant_id, memberID, ...body }
-    );
+            {
+                tenant_id,
+                memberID,
+                email,
+                first_name: body.first_name ?? null,
+                last_name: body.last_name ?? null,
+                phone: body.phone ?? null,
+                pharmacy_patient_ref: body.pharmacy_patient_ref ?? null
+            }
+        );
 
         await emitEvent(tenant_id, "member.link.updated", { memberID });
         res.json({ ok: true });
