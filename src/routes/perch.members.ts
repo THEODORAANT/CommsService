@@ -47,15 +47,19 @@ const MemberLinkSchema = z.object({
 perchMembers.post(
     "/v1/perch/members/:memberID/link",
     authedHandler(async (req, res) => {
+        //console.log("Incoming body:", req.body);
+
         const tenant_id = req.tenant_id;
+        console.log("tenant_id :", tenant_id);
         const memberID = Number(req.params.memberID);
+        console.log("memberID :", memberID);
         const body = MemberLinkSchema.parse(req.body);
 
     await q(
         `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
      VALUES (:tenant_id, :memberID, :email, :first_name, :last_name, :phone, :pharmacy_patient_ref)
      ON DUPLICATE KEY UPDATE
-       email = COALESCE(VALUES(email), email),
+       email = COALESCE(VALUES(email), memberEmail),
        first_name = COALESCE(VALUES(first_name), first_name),
        last_name = COALESCE(VALUES(last_name), last_name),
        phone = COALESCE(VALUES(phone), phone),
