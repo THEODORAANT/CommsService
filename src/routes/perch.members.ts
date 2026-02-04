@@ -5,6 +5,7 @@ import { q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
+import { config } from "../config.js";
 
 export const perchMembers = Router();
 
@@ -39,11 +40,59 @@ const MessageCreateSchema = z.object({
 const MemberLinkSchema = z.object({
     email: z.string().email().optional().nullable(),
     memberEmail: z.string().email().optional().nullable(),
+    name: z.string().optional().nullable(),
     first_name: z.string().optional().nullable(),
     last_name: z.string().optional().nullable(),
     phone: z.string().optional().nullable(),
-    pharmacy_patient_ref: z.string().optional().nullable()
+    pharmacy_patient_ref: z.string().optional().nullable(),
+    dob: z.string().optional().nullable(),
+    gender: z.string().optional().nullable(),
+    addressLine1: z.string().optional().nullable(),
+    city: z.string().optional().nullable(),
+    postCode: z.string().optional().nullable(),
+    country: z.string().optional().nullable()
 });
+
+type PharmacyCustomerResponse = {
+    success: boolean;
+    message?: string;
+    data?: {
+        customerId?: string;
+    };
+};
+
+async function createPharmacyCustomer(payload: {
+    name: string;
+    email: string;
+    dob: string;
+    phone: string;
+    gender: string;
+    addressLine1: string;
+    city: string;
+    postCode: string;
+    country: string;
+}): Promise<string> {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    const data = (await resp.json()) as PharmacyCustomerResponse;
+    const customerId = data?.data?.customerId;
+    if (!customerId) {
+        throw new Error("Pharmacy API missing customerId");
+    }
+
+    return customerId;
+}
 
 perchMembers.post(
     "/v1/perch/members/:memberID/link",
@@ -56,6 +105,34 @@ perchMembers.post(
         console.log("memberID :", memberID);
         const body = MemberLinkSchema.parse(req.body);
         const email = body.email ?? body.memberEmail ?? null;
+        const fullName = body.name ?? [body.first_name, body.last_name].filter(Boolean).join(" ").trim();
+
+        if (
+            !email ||
+            !fullName ||
+            !body.dob ||
+            !body.phone ||
+            !body.gender ||
+            !body.addressLine1 ||
+            !body.city ||
+            !body.postCode ||
+            !body.country
+        ) {
+            res.status(400).json({ ok: false, message: "Missing required pharmacy customer fields." });
+            return;
+        }
+
+        const pharmacyCustomerId = await createPharmacyCustomer({
+            name: fullName,
+            email,
+            dob: body.dob,
+            phone: body.phone,
+            gender: body.gender,
+            addressLine1: body.addressLine1,
+            city: body.city,
+            postCode: body.postCode,
+            country: body.country
+        });
 
         await q(
             `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
@@ -74,7 +151,7 @@ perchMembers.post(
                 first_name: body.first_name ?? null,
                 last_name: body.last_name ?? null,
                 phone: body.phone ?? null,
-                pharmacy_patient_ref: body.pharmacy_patient_ref ?? null
+                pharmacy_patient_ref: pharmacyCustomerId
             }
         );
 
