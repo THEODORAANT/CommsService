@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
+import fetch from "node-fetch";
 import { q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
