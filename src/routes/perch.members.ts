@@ -81,6 +81,7 @@ async function createPharmacyCustomer(payload: {
         },
         body: JSON.stringify(payload)
     });
+console.log("pst");console.log(resp);
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);

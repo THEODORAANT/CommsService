@@ -36,7 +36,7 @@ actor:{role:'admin',user_id:'cli',display_name:'CLI'},
 iss:'perch',
 aud:'comms-service'
 },
-'jwtgrtts',
+'2wwTARwF19RYnS3POX/8UyP8eIKDhx2jjY479IeKGag=',
 { algorithm:'HS256', expiresIn:'1h' }
 ));
 "
