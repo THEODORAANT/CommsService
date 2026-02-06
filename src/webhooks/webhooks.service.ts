@@ -176,7 +176,7 @@ WHERE d.delivery_id=:delivery_id`,
     return { processed: due.length };
 }
 async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: any) {
-    if (payloadObj.event_type !== "note.created") {
+    if (!["note.created", "note.reply.created"].includes(payloadObj.event_type)) {
         const err: any = new Error("Unsupported pharmacy event type");
         err.status = 400;
         throw err;
@@ -185,7 +185,6 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
     const note_id = payloadObj?.data?.note_id;
     const memberID = payloadObj?.data?.memberID;
     const orderID = payloadObj?.data?.orderID ?? null;
-    const scope = payloadObj?.data?.scope;
 
     if (!note_id || !memberID) {
         const err: any = new Error("Missing note_id/memberID in event data");
@@ -193,7 +192,6 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
         throw err;
     }
 
-    // Get member email
     const memRows = await q<any>(
         `SELECT email FROM members WHERE tenant_id=:tenant_id AND memberID=:memberID`,
         { tenant_id, memberID }
@@ -206,9 +204,8 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
         throw err;
     }
 
-    // Get full note details
     const noteRows = await q<any>(
-        `SELECT note_type, title, body, created_by_role, created_by_display_name, created_at
+        `SELECT note_type, title, body, created_by_role, created_by_display_name, created_at, scope, memberID, orderID
      FROM notes
      WHERE tenant_id=:tenant_id AND note_id=:note_id`,
         { tenant_id, note_id }
@@ -222,15 +219,54 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
 
     const n = noteRows[0];
 
-    // Compose note text for Pharmacy
+    const scope = n.scope;
+    const noteMemberID = n.memberID ?? memberID;
+    const noteOrderID = n.orderID ?? orderID;
+
     const headerParts = [
-        `[CommsService note_id=${note_id} scope=${scope} memberID=${memberID}${orderID ? ` orderID=${orderID}` : ""}]`,
-        `[from=${n.created_by_role}${n.created_by_display_name ? `:${n.created_by_display_name}` : ""}]`
+        `[CommsService note_id=${note_id} scope=${scope} memberID=${noteMemberID}${noteOrderID ? ` orderID=${noteOrderID}` : ""}]`
     ];
+
+    if (payloadObj.event_type === "note.created") {
+        headerParts.push(
+            `[from=${n.created_by_role}${n.created_by_display_name ? `:${n.created_by_display_name}` : ""}]`
+        );
+        if (n.title) headerParts.push(`[title=${n.title}]`);
+        return { email, note: `${headerParts.join(" ")}\n${n.body}`, note_type: n.note_type };
+    }
+
+    const noteReplyId = payloadObj?.data?.note_reply_id;
+
+    if (!noteReplyId) {
+        const err: any = new Error("Missing note_reply_id in event data");
+        err.status = 400;
+        throw err;
+    }
+
+    const replyRows = await q<any>(
+        `SELECT body, created_by_role, created_by_display_name, created_at
+     FROM note_replies
+     WHERE tenant_id=:tenant_id AND note_reply_id=:note_reply_id`,
+        { tenant_id, note_reply_id: noteReplyId }
+    );
+
+    if (!replyRows.length) {
+        const err: any = new Error("Reply not found for note_reply_id");
+        err.status = 404;
+        throw err;
+    }
+
+    const reply = replyRows[0];
+
+    headerParts.push(`[reply_id=${noteReplyId}]`);
+    if (reply.created_at) headerParts.push(`[replied_at=${reply.created_at}]`);
+    headerParts.push(
+        `[from=${reply.created_by_role}${reply.created_by_display_name ? `:${reply.created_by_display_name}` : ""}]`
+    );
 
     if (n.title) headerParts.push(`[title=${n.title}]`);
 
-    const composed = `${headerParts.join(" ")}\n${n.body}`;
+    const composed = `${headerParts.join(" ")}\n${reply.body}`;
 
     return { email, note: composed, note_type: n.note_type };
 }
