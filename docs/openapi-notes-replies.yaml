@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Comms Service Notes API
+  version: 1.0.0
+paths:
+  /v1/notes/{note_id}/replies:
+    post:
+      summary: Create a reply on an existing note
+      description: Creates a note reply and emits a note.reply.created event.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: note_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      x-codeSamples:
+        - lang: cURL
+          source: |-
+            curl --request POST 'https://comms.example.com/v1/notes/{note_id}/replies' \
+              --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZW5hbnRfaWQiOiJnd2wtY3kiLCJhY3RvciI6eyJyb2xlIjoiYWRtaW4iLCJ1c2VyX2lkIjoiY2xpIiwiZGlzcGxheV9uYW1lIjoiQ0xJIn0sImlzcyI6InBlcmNoIiwiYXVkIjoiY29tbXMtc2VydmljZSIsImlhdCI6MTc3MDM3NTM1MCwiZXhwIjoxNzcwMzc4OTUwfQ.q6YLf-Znl3FXS094oxdzbbzqELKxIKtBSdtiec8Mces' \
+              --header 'X-Tenant-Id: gwl-cy' \
+              --header 'Content-Type: application/json' \
+              --data-raw '{
+                "body": "Replying in-thread to the note.",
+                "created_by": {
+                  "role": "pharmacist",
+                  "user_id": "pharm_u123",
+                  "display_name": "Dr Pharmacist"
+                }
+              }'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, created_by]
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                created_by:
+                  type: object
+                  required: [role]
+                  properties:
+                    role:
+                      type: string
+                      enum: [admin, pharmacist, patient, system]
+                    user_id:
+                      type: string
+                      nullable: true
+                    display_name:
+                      type: string
+                      nullable: true
+                external_reply_ref:
+                  type: string
+                  nullable: true
+      responses:
+        "201":
+          description: Reply created
+          headers:
+            X-Idempotency-Replayed:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  note_reply_id:
+                    type: string
+                  note_id:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+        "404":
+          description: Note not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
