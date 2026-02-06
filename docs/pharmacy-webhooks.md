@@ -2,6 +2,17 @@
 
 This guide describes how Pharmacy systems receive Comms Service webhooks for note creation and threaded note replies (chat replies).
 
+## System flow diagram
+
+```mermaid
+flowchart LR
+    Perch[Perch / Admin UI] -->|Create note / reply| Comms[Comms Service API]
+    Comms -->|emitEvent| Queue[(webhook_deliveries)]
+    Worker[Webhook worker / internal endpoint] -->|processWebhookBatch| Queue
+    Queue -->|POST webhooks| Pharmacy[Pharmacy Webhook Endpoint]
+    Comms -->|read notes/replies + member email| Comms
+```
+
 ## 1) Subscription setup
 
 Create a webhook subscription for the tenant with `subscriber_system = 'pharmacy'`. The service reads subscriptions from the `webhook_subscriptions` table and delivers queued events via the worker or internal endpoint.
