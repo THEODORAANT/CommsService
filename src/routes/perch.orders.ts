@@ -37,6 +37,35 @@ const OrderLinkSchema = z.object({
     status: z.string().optional().nullable()
 });
 
+const OrderCreateSchema = z.object({
+    customerId: z.string().min(1),
+    items: z.array(
+        z.object({
+            productId: z.string().min(1),
+            quantity: z.number().int().positive()
+        })
+    ).min(1),
+    shipping: z.object({
+        addressLine1: z.string().min(1),
+        addressLine2: z.string().optional().nullable(),
+        city: z.string().min(1),
+        postCode: z.string().min(1),
+        country: z.string().min(1)
+    }),
+    assessment: z.array(
+        z.object({
+            question: z.string().min(1),
+            answer: z.string().min(1)
+        })
+    ).optional(),
+    notes: z.string().optional().nullable()
+});
+
+type PharmacyOrderCreateResponse = {
+    success: boolean;
+    orderNumber?: string;
+};
+
 type PharmacyOrderNoteResponse = {
     success: boolean;
     message?: string;
@@ -81,6 +110,80 @@ async function createPharmacyOrderNote(payload: {
 
     return (await resp.json()) as PharmacyOrderNoteResponse;
 }
+
+async function createPharmacyOrder(payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/create`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    const data = (await resp.json()) as PharmacyOrderCreateResponse;
+    const orderNumber = data?.orderNumber;
+    if (!orderNumber) {
+        throw new Error("Pharmacy API missing orderNumber");
+    }
+
+    return orderNumber;
+}
+
+perchOrders.post(
+    "/v1/perch/orders/:orderID/create",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const orderID = Number(req.params.orderID);
+        const idem = req.header("Idempotency-Key") || undefined;
+
+        const body = OrderCreateSchema.parse(req.body);
+        const endpoint = "/v1/perch/orders/:orderID/create";
+
+        const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
+            const memberRows = await q<any>(
+                `SELECT memberID FROM members WHERE tenant_id=:tenant_id AND pharmacy_patient_ref=:customerId`,
+                { tenant_id, customerId: body.customerId }
+            );
+            if (!memberRows.length) {
+                const err: any = new Error("Member not found for customerId. Link member with pharmacy_patient_ref first.");
+                err.status = 422;
+                throw err;
+            }
+            const memberID = Number(memberRows[0].memberID);
+
+            const pharmacyOrderNumber = await createPharmacyOrder(body);
+
+            await q(
+                `INSERT INTO orders(tenant_id, orderID, memberID, pharmacy_order_ref, status)
+     VALUES (:tenant_id, :orderID, :memberID, :pharmacy_order_ref, :status)
+     ON DUPLICATE KEY UPDATE
+       memberID=VALUES(memberID),
+       pharmacy_order_ref=COALESCE(VALUES(pharmacy_order_ref), pharmacy_order_ref),
+       status=COALESCE(VALUES(status), status),
+       updated_at=CURRENT_TIMESTAMP(3)`,
+                {
+                    tenant_id,
+                    orderID,
+                    memberID,
+                    pharmacy_order_ref: pharmacyOrderNumber,
+                    status: null
+                }
+            );
+
+            await emitEvent(tenant_id, "order.link.updated", { orderID, memberID });
+
+            return { ok: true, orderNumber: pharmacyOrderNumber };
+        });
+
+        res.setHeader("X-Idempotency-Replayed", String(replayed));
+        res.status(201).json(result);
+    })
+);
 
 perchOrders.post(
     "/v1/perch/orders/:orderID/link",
