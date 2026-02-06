@@ -40,3 +40,6 @@ aud:'comms-service'
 { algorithm:'HS256', expiresIn:'1h' }
 ));
 "
+
+## Pharmacy webhooks
+See [docs/pharmacy-webhooks.md](docs/pharmacy-webhooks.md) for Pharmacy-facing webhook subscription and payload details.
