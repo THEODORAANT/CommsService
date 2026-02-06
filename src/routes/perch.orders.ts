@@ -1,10 +1,12 @@
 import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
+import fetch from "node-fetch";
 import { q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
+import { config } from "../config.js";
 
 export const perchOrders = Router();
 
@@ -34,6 +36,51 @@ const OrderLinkSchema = z.object({
     pharmacy_order_ref: z.string().optional().nullable(),
     status: z.string().optional().nullable()
 });
+
+type PharmacyOrderNoteResponse = {
+    success: boolean;
+    message?: string;
+    note?: {
+        _id?: string;
+        content?: string;
+        type?: string;
+        author?: string;
+        createdAt?: string;
+    };
+    pharmacy_note_id?: string;
+    thread_id?: string;
+};
+
+const pharmacyNoteTypeMap: Record<string, string> = {
+    admin_note: "ADMIN",
+    clinical_note: "CLINICAL"
+};
+
+async function createPharmacyOrderNote(payload: {
+    orderNumber: string;
+    body: string;
+    type: string;
+    author?: string | null;
+}): Promise<PharmacyOrderNoteResponse> {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${payload.orderNumber}/notes`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            body: payload.body,
+            type: payload.type,
+            author: payload.author ?? undefined
+        })
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    return (await resp.json()) as PharmacyOrderNoteResponse;
+}
 
 perchOrders.post(
     "/v1/perch/orders/:orderID/link",
@@ -126,7 +173,7 @@ perchOrders.post(
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
             const rows = await q<any>(
-                `SELECT memberID FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+                `SELECT memberID, pharmacy_order_ref FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
                 { tenant_id, orderID }
             );
             if (!rows.length) {
@@ -135,6 +182,12 @@ perchOrders.post(
                 throw err;
             }
             const memberID = Number(rows[0].memberID);
+            const pharmacyOrderRef = rows[0].pharmacy_order_ref as string | null;
+            if (!pharmacyOrderRef) {
+                const err: any = new Error("Order is missing pharmacy_order_ref. Link the order with pharmacy_order_ref first.");
+                err.status = 422;
+                throw err;
+            }
 
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";
@@ -167,6 +220,13 @@ perchOrders.post(
 
             await emitEvent(tenant_id, "note.created", { note_id, memberID, orderID, scope: "order" });
 
+            const pharmacyResponse = await createPharmacyOrderNote({
+                orderNumber: pharmacyOrderRef,
+                body: body.body,
+                type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
+                author: body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role
+            });
+
             return {
                 note_id,
                 thread_root_id: note_id,
@@ -175,7 +235,9 @@ perchOrders.post(
                 orderID,
                 note_type: body.note_type,
                 status,
-                created_at: new Date().toISOString()
+                created_at: new Date().toISOString(),
+                pharmacy_note_id: pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null,
+                pharmacy_thread_id: pharmacyResponse.thread_id ?? null
             };
         });
 
