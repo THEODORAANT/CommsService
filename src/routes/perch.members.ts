@@ -62,6 +62,12 @@ type PharmacyCustomerResponse = {
     };
 };
 
+type PharmacyCustomerLookupResponse = {
+    success: boolean;
+    message?: string;
+    data?: Record<string, unknown>;
+};
+
 async function createPharmacyCustomer(payload: {
     name: string;
     email: string;
@@ -95,6 +101,35 @@ console.log("pst");console.log(resp);
 
     return customerId;
 }
+
+async function getPharmacyCustomerByEmail(email: string): Promise<PharmacyCustomerLookupResponse> {
+    const resp = await fetch(
+        `${config.pharmacyApiBaseUrl}/api/customers/${encodeURIComponent(email)}`,
+        {
+            method: "GET",
+            headers: {
+                "x-api-key": config.pharmacyApiKey
+            }
+        }
+    );
+
+    if (!resp.ok) {
+        const err: any = new Error(`Pharmacy API error: ${resp.status}`);
+        err.status = resp.status;
+        throw err;
+    }
+
+    return (await resp.json()) as PharmacyCustomerLookupResponse;
+}
+
+perchMembers.get(
+    "/v1/perch/customers/:email",
+    authedHandler(async (req, res) => {
+        const email = z.string().email().parse(req.params.email);
+        const customer = await getPharmacyCustomerByEmail(email);
+        res.json(customer);
+    })
+);
 
 perchMembers.post(
     "/v1/perch/members/:memberID/link",
