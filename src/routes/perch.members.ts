@@ -193,7 +193,7 @@ perchMembers.post(
         );
 
         await emitEvent(tenant_id, "member.link.updated", { memberID });
-        res.json({ ok: true });
+        res.json({ ok: true,customerId:pharmacyCustomerId });
     })
 );
 
