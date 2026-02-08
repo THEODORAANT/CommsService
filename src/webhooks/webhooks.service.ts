@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import fetch from "node-fetch";
+//import fetch from "node-fetch";
 import { q } from "../db.js";
 import { config } from "../config.js";
 
