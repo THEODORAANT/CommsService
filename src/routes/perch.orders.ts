@@ -217,7 +217,7 @@ perchOrders.post(
         );
 
         await emitEvent(tenant_id, "order.link.updated", { orderID, memberID: body.memberID });
-        res.json({ ok: true });
+        res.json({ ok: true,pharmacy_order_ref:body.pharmacy_order_ref });
     })
 );
 
