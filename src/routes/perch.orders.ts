@@ -171,7 +171,7 @@ perchOrders.post(
                     orderID,
                     memberID,
                     pharmacy_order_ref: pharmacyOrderNumber,
-                    status: null
+                    status: "PAYMENT_RECEIVED"
                 }
             );
 
