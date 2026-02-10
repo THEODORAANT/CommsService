@@ -123,6 +123,34 @@ CREATE TABLE IF NOT EXISTS webhook_subscriptions (
   CONSTRAINT fk_webhook_sub_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS order_work_queue (
+  tenant_id VARCHAR(64) NOT NULL,
+  orderID BIGINT NOT NULL,
+  order_number VARCHAR(32) NOT NULL,
+  status ENUM('queued','processing','done') NOT NULL DEFAULT 'queued',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (tenant_id, orderID),
+  KEY idx_work_queue_status (tenant_id, status, created_at),
+  CONSTRAINT fk_work_queue_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
+  CONSTRAINT fk_work_queue_order FOREIGN KEY (tenant_id, orderID)
+    REFERENCES orders(tenant_id, orderID) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS order_assessment_status (
+  tenant_id VARCHAR(64) NOT NULL,
+  orderID BIGINT NOT NULL,
+  order_number VARCHAR(32) NOT NULL,
+  status ENUM('active','refunded') NOT NULL DEFAULT 'active',
+  refund_reason TEXT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (tenant_id, orderID),
+  CONSTRAINT fk_assessment_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
+  CONSTRAINT fk_assessment_order FOREIGN KEY (tenant_id, orderID)
+    REFERENCES orders(tenant_id, orderID) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 -- DB-backed queue for webhook delivery (no Redis)
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
   delivery_id CHAR(36) PRIMARY KEY,
