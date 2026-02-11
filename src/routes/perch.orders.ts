@@ -2,7 +2,7 @@ import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 //import fetch from "node-fetch";
-import { q } from "../db.js";
+import { pool, q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
@@ -60,6 +60,18 @@ const OrderCreateSchema = z.object({
     ).optional(),
     notes: z.string().optional().nullable()
 });
+
+const UpdateOrderStatusSchema = z.object({
+    status: z.enum(["PENDING", "APPROVED", "CANCELLED", "REFUND"]),
+    reason: z.string().trim().min(1).optional()
+});
+
+const orderLockedStatuses = new Set(["APPROVED", "PROCESSING", "REFUND"]);
+const orderAllowedTransitions: Record<string, Set<string>> = {
+    PAYMENT_RECEIVED: new Set(["PENDING", "CANCELLED"]),
+    PENDING: new Set(["APPROVED"]),
+    CANCELLED: new Set(["REFUND"])
+};
 
 type PharmacyOrderCreateResponse = {
     success: boolean;
@@ -218,6 +230,120 @@ perchOrders.post(
 
         await emitEvent(tenant_id, "order.link.updated", { orderID, memberID: body.memberID });
         res.json({ ok: true,pharmacy_order_ref:body.pharmacy_order_ref });
+    })
+);
+
+perchOrders.post(
+    "/v1/perch/orders/:orderID/status",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const orderID = Number(req.params.orderID);
+        const body = UpdateOrderStatusSchema.parse(req.body);
+
+        if (!Number.isInteger(orderID) || orderID <= 0) {
+            const err: any = new Error("Invalid orderID");
+            err.status = 400;
+            throw err;
+        }
+
+        if ((body.status === "CANCELLED" || body.status === "REFUND") && !body.reason) {
+            const err: any = new Error("reason is required when status is CANCELLED or REFUND");
+            err.status = 400;
+            throw err;
+        }
+
+        const connection = await pool.getConnection();
+        try {
+            await connection.beginTransaction();
+
+            const [rows] = await connection.query<any[]>(
+                `SELECT tenant_id, orderID, pharmacy_order_ref, status
+                   FROM orders
+                  WHERE tenant_id=:tenant_id AND orderID=:orderID
+                  LIMIT 1
+                  FOR UPDATE`,
+                { tenant_id, orderID }
+            );
+
+            if (!rows.length) {
+                const err: any = new Error("Order not found");
+                err.status = 404;
+                throw err;
+            }
+
+            const order = rows[0];
+            const currentStatus = String(order.status ?? "").toUpperCase();
+
+            if (orderLockedStatuses.has(currentStatus)) {
+                const err: any = new Error(`Order status is locked from ${currentStatus}`);
+                err.status = 409;
+                throw err;
+            }
+
+            const validTargets = orderAllowedTransitions[currentStatus];
+            if (!validTargets || !validTargets.has(body.status)) {
+                const err: any = new Error(`Invalid status transition from ${currentStatus} to ${body.status}`);
+                err.status = 409;
+                throw err;
+            }
+
+            await connection.query(
+                `UPDATE orders
+                    SET status=:status,
+                        updated_at=CURRENT_TIMESTAMP(3)
+                  WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+                {
+                    status: body.status,
+                    tenant_id,
+                    orderID
+                }
+            );
+
+            if (body.status === "PENDING") {
+                await connection.query(
+                    `INSERT INTO order_work_queue(tenant_id, orderID, order_number, status)
+                     VALUES (:tenant_id, :orderID, :order_number, 'queued')
+                     ON DUPLICATE KEY UPDATE
+                       status='queued',
+                       updated_at=CURRENT_TIMESTAMP(3)`,
+                    {
+                        tenant_id,
+                        orderID,
+                        order_number: order.pharmacy_order_ref ?? String(orderID)
+                    }
+                );
+            }
+
+            if (body.status === "REFUND") {
+                await connection.query(
+                    `INSERT INTO order_assessment_status(tenant_id, orderID, order_number, status, refund_reason)
+                     VALUES (:tenant_id, :orderID, :order_number, 'refunded', :refund_reason)
+                     ON DUPLICATE KEY UPDATE
+                       status='refunded',
+                       refund_reason=VALUES(refund_reason),
+                       updated_at=CURRENT_TIMESTAMP(3)`,
+                    {
+                        tenant_id,
+                        orderID,
+                        order_number: order.pharmacy_order_ref ?? String(orderID),
+                        refund_reason: body.reason ?? null
+                    }
+                );
+            }
+
+            await connection.commit();
+            res.json({
+                ok: true,
+                orderID,
+                previousStatus: currentStatus,
+                status: body.status
+            });
+        } catch (e) {
+            await connection.rollback();
+            throw e;
+        } finally {
+            connection.release();
+        }
     })
 );
 
