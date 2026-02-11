@@ -1,6 +1,6 @@
 # Pharmacy Webhooks: Notes & Chat Replies
 
-This guide describes how Pharmacy systems receive Comms Service webhooks for note creation and threaded note replies (chat replies).
+This guide describes how Comms Service processes queued note events for Pharmacy and forwards eligible events to the Pharmacy Add Order Note API.
 
 ## System flow diagram
 
@@ -9,7 +9,7 @@ flowchart LR
     Perch[Perch / Admin UI] -->|Create note / reply| Comms[Comms Service API]
     Comms -->|emitEvent| Queue[(webhook_deliveries)]
     Worker[Webhook worker / internal endpoint] -->|processWebhookBatch| Queue
-    Queue -->|POST webhooks| Pharmacy[Pharmacy Webhook Endpoint]
+    Queue -->|POST /api/orders/{orderNumber}/notes| Pharmacy[Pharmacy API]
     Comms -->|read notes/replies + member email| Comms
 ```
 
@@ -39,51 +39,36 @@ INSERT INTO webhook_subscriptions (
 );
 ```
 
-## 2) Delivery headers
+## 2) Pharmacy API request
 
-All webhook requests include these headers:
+For `subscriber_system = 'pharmacy'`, Comms Service calls Pharmacy's Add Order Note API:
 
-* `Content-Type: application/json`
-* `X-Event-Id`: UUID for the event
-* `X-Event-Type`: `note.created` or `note.reply.created`
-* `X-Event-Timestamp`: ISO-8601 timestamp
-* `X-Signature`: `sha256=<hex_hmac>` (HMAC-SHA256 of the raw request body using the `secret` from `webhook_subscriptions`)
-
-## 3) Pharmacy webhook payloads
-
-Pharmacy receives a normalized JSON body that is easier to consume than the raw Comms Service event. The body is:
+* `POST /api/orders/{orderNumber}/notes`
+* Headers:
+  * `x-api-key: <PHARMACY_API_KEY>`
+  * `Content-Type: application/json`
+* Body:
 
 ```json
 {
-  "email": "patient@example.com",
-  "note": "[CommsService note_id=... scope=order memberID=... orderID=...] [from=admin:Jane] [title=Shipping update]\nThe note body...",
-  "note_type": "admin_note"
+  "body": "Patient requires follow-up call.",
+  "type": "ADMIN",
+  "author": "Dr. Smith"
 }
 ```
 
-### 3.1 `note.created` payload
+`type` is mapped from Comms `note_type`:
 
-When a note is created, the `note` field is composed from the note metadata and the note body:
+* `admin_note` -> `ADMIN`
+* `clinical_note` -> `CLINICAL`
 
-* Header includes: `note_id`, `scope`, `memberID`, optional `orderID`, `from`, and optional `title`.
-* The note body is appended after a newline.
+## 3) Event eligibility
 
-### 3.2 `note.reply.created` payload (chat replies)
+Only order-scoped `note.created` events are forwarded to Pharmacy. Other events (including patient-scoped notes and reply events) are intentionally skipped.
 
-When a reply is created, the `note` field is composed from the note metadata plus reply details:
+## 4) Order number resolution
 
-* Header includes: `note_id`, `scope`, `memberID`, optional `orderID`, `reply_id`, optional `replied_at`, `from`, and optional `title`.
-* The reply body is appended after a newline.
-
-This keeps the Pharmacy payload shape consistent while still conveying the reply context.
-
-## 4) Verifying signatures
-
-To validate the webhook:
-
-1. Read the raw request body as bytes (do not re-serialize).
-2. Compute `HMAC-SHA256(secret, rawBody)` where `secret` matches the `webhook_subscriptions.secret` value.
-3. Compare the hex digest to `X-Signature` (strip the `sha256=` prefix).
+Pharmacy `orderNumber` is resolved from `orders.pharmacy_order_ref` using the event's `orderID`. If an order is missing `pharmacy_order_ref`, delivery fails and retries according to normal webhook retry rules.
 
 ## 5) Delivery & retries
 
@@ -91,6 +76,6 @@ Webhook deliveries are queued and retried with exponential-ish backoff until suc
 
 ## 6) Operational notes
 
-* Pharmacy deliveries only process order-scoped `note.created` events; patient-scoped notes are skipped.
+* Pharmacy deliveries only process order-scoped `note.created` events and send them to `/api/orders/{orderNumber}/notes`.
 * If you only want admin notes, set `PHARMACY_ONLY_ADMIN_NOTES=true` (default).
-* Make sure member emails are linked in the `members` table or delivery will fail with a 422-style error.
+* Make sure linked orders have `orders.pharmacy_order_ref` populated or delivery will fail with a 422-style error.

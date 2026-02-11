@@ -57,6 +57,32 @@ export function computeNextAttempt(attempt: number): number {
     return schedule[Math.min(attempt, schedule.length - 1)];
 }
 
+
+
+const pharmacyNoteTypeMap: Record<string, string> = {
+    admin_note: "ADMIN",
+    clinical_note: "CLINICAL"
+};
+
+async function postOrderNoteToPharmacy(orderNumber: string, payload: {
+    body: string;
+    type: string;
+    author?: string;
+}) {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${orderNumber}/notes`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+}
+
 export async function processWebhookBatch(limit = 50) {
     // lock due deliveries to avoid double-processing (simple "locked_until" lease)
     const lockSeconds = config.webhookLockSeconds;
@@ -107,30 +133,22 @@ WHERE d.delivery_id=:delivery_id`,
         try {
             if (d.subscriber_system === "pharmacy") {
                 const noteScope = payloadObj?.data?.scope;
-                if (noteScope !== "order") {
-                    ok = true; // pharmacy only accepts order-scoped notes
+                if (payloadObj?.event_type !== "note.created" || noteScope !== "order") {
+                    ok = true; // pharmacy only accepts order-scoped note.created events
                 } else {
-                    // Build Pharmacy payload { email, note }
-                    const pharmacyPayload = await buildPharmacyCustomerNotePayload(d.tenant_id, payloadObj);
+                    const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
                     // Optional filter: push only admin_note
                     const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
                     if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
                         ok = true; // treat as success (intentionally skipped)
                     } else {
-                        const resp = await fetch(d.url, {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json",
-                                "X-Event-Id": d.event_id,
-                                "X-Event-Type": d.event_type,
-                                "X-Event-Timestamp": new Date().toISOString(),
-                                "X-Signature": `sha256=${sig}`
-                            },
-                            body: JSON.stringify(pharmacyPayload)
+                        await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
+                            body: pharmacyPayload.body,
+                            type: pharmacyPayload.type,
+                            author: pharmacyPayload.author
                         });
-                        ok = resp.ok;
-                        if (!ok) errText = `HTTP ${resp.status}`;
+                        ok = true;
                     }
                 }
             } else {
@@ -180,7 +198,7 @@ WHERE d.delivery_id=:delivery_id`,
 
     return { processed: due.length };
 }
-async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: any) {
+async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any) {
     if (payloadObj.event_type !== "note.created") {
         const err: any = new Error("Unsupported pharmacy event type");
         err.status = 400;
@@ -192,28 +210,26 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
     const orderID = payloadObj?.data?.orderID ?? null;
     const scope = payloadObj?.data?.scope;
 
-    if (!note_id || !memberID) {
-        const err: any = new Error("Missing note_id/memberID in event data");
+    if (!note_id || !memberID || !orderID || scope !== "order") {
+        const err: any = new Error("Pharmacy requires order-scoped note.created events with orderID");
         err.status = 400;
         throw err;
     }
 
-    // Get member email
-    const memRows = await q<any>(
-        `SELECT email FROM members WHERE tenant_id=:tenant_id AND memberID=:memberID`,
-        { tenant_id, memberID }
+    const orderRows = await q<any>(
+        `SELECT pharmacy_order_ref FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+        { tenant_id, orderID }
     );
 
-    const email = memRows?.[0]?.email;
-    if (!email) {
-        const err: any = new Error(`Missing email for memberID=${memberID}. Link member with email first.`);
+    const order_number = orderRows?.[0]?.pharmacy_order_ref;
+    if (!order_number) {
+        const err: any = new Error(`Missing pharmacy_order_ref for orderID=${orderID}.`);
         err.status = 422;
         throw err;
     }
 
-    // Get full note details
     const noteRows = await q<any>(
-        `SELECT note_type, title, body, created_by_role, created_by_display_name, created_at
+        `SELECT note_type, body, created_by_role, created_by_user_id, created_by_display_name
      FROM notes
      WHERE tenant_id=:tenant_id AND note_id=:note_id`,
         { tenant_id, note_id }
@@ -227,15 +243,11 @@ async function buildPharmacyCustomerNotePayload(tenant_id: string, payloadObj: a
 
     const n = noteRows[0];
 
-    // Compose note text for Pharmacy
-    const headerParts = [
-        `[CommsService note_id=${note_id} scope=${scope} memberID=${memberID}${orderID ? ` orderID=${orderID}` : ""}]`,
-        `[from=${n.created_by_role}${n.created_by_display_name ? `:${n.created_by_display_name}` : ""}]`
-    ];
-
-    if (n.title) headerParts.push(`[title=${n.title}]`);
-
-    const composed = `${headerParts.join(" ")}\n${n.body}`;
-
-    return { email, note: composed, note_type: n.note_type };
+    return {
+        order_number: String(order_number),
+        body: String(n.body),
+        type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
+        author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
+        note_type: n.note_type
+    };
 }
