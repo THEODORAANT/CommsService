@@ -91,6 +91,6 @@ Webhook deliveries are queued and retried with exponential-ish backoff until suc
 
 ## 6) Operational notes
 
-* Pharmacy deliveries only send `note.created` and `note.reply.created` events.
+* Pharmacy deliveries only process order-scoped `note.created` events; patient-scoped notes are skipped.
 * If you only want admin notes, set `PHARMACY_ONLY_ADMIN_NOTES=true` (default).
 * Make sure member emails are linked in the `members` table or delivery will fail with a 422-style error.

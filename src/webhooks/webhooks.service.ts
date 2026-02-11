@@ -106,27 +106,32 @@ WHERE d.delivery_id=:delivery_id`,
 
         try {
             if (d.subscriber_system === "pharmacy") {
-                // Build Pharmacy payload { email, note }
-                const pharmacyPayload = await buildPharmacyCustomerNotePayload(d.tenant_id, payloadObj);
-
-                // Optional filter: push only admin_note
-                const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
-                if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
-                    ok = true; // treat as success (intentionally skipped)
+                const noteScope = payloadObj?.data?.scope;
+                if (noteScope !== "order") {
+                    ok = true; // pharmacy only accepts order-scoped notes
                 } else {
-                    const resp = await fetch(d.url, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "X-Event-Id": d.event_id,
-                            "X-Event-Type": d.event_type,
-                            "X-Event-Timestamp": new Date().toISOString(),
-                            "X-Signature": `sha256=${sig}`
-                        },
-                        body: JSON.stringify(pharmacyPayload)
-                    });
-                    ok = resp.ok;
-                    if (!ok) errText = `HTTP ${resp.status}`;
+                    // Build Pharmacy payload { email, note }
+                    const pharmacyPayload = await buildPharmacyCustomerNotePayload(d.tenant_id, payloadObj);
+
+                    // Optional filter: push only admin_note
+                    const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
+                    if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
+                        ok = true; // treat as success (intentionally skipped)
+                    } else {
+                        const resp = await fetch(d.url, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-Event-Id": d.event_id,
+                                "X-Event-Type": d.event_type,
+                                "X-Event-Timestamp": new Date().toISOString(),
+                                "X-Signature": `sha256=${sig}`
+                            },
+                            body: JSON.stringify(pharmacyPayload)
+                        });
+                        ok = resp.ok;
+                        if (!ok) errText = `HTTP ${resp.status}`;
+                    }
                 }
             } else {
                 const resp = await fetch(d.url, {
