@@ -78,6 +78,10 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     console.log("postOrderNoteToPharmacy");
     console.log(orderNumber);
     console.log(payload);
+    console.log("pharmacyApiBaseUrl");
+    console.log(config.pharmacyApiBaseUrl);
+    console.log("pharmacyApiKey");
+    console.log(config.pharmacyApiKey);
     const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${orderNumber}/notes`, {
         method: "POST",
         headers: {
@@ -86,7 +90,8 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
         },
         body: JSON.stringify(payload)
     });
-
+    console.log("resp");
+    console.log(resp);
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
@@ -152,6 +157,7 @@ WHERE d.delivery_id=:delivery_id`,
                     if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
                         ok = true; // treat as success (intentionally skipped)
                     } else {
+                        console.log("postOrderNoteToPharmacy here");
                         await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
                             body: pharmacyPayload.body,
                             type: pharmacyPayload.type,
