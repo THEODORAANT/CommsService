@@ -27,6 +27,7 @@ POST /v1/perch/orders/{orderID}/link
 PHARMACY_PUSH_NOTES: enable/disable pushing notes to Pharmacy
 
 PHARMACY_ONLY_ADMIN_NOTES: if true, only push admin_note (typical requirement)
+Pharmacy webhooks only receive order-scoped notes (patient-scoped notes are skipped).
 node -e "
 const jwt=require('jsonwebtoken');
 console.log(jwt.sign(
