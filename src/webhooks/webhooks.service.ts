@@ -7,6 +7,14 @@ export function signWebhook(secret: string, rawBody: string): string {
     return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
 }
 
+function parseMaybeJson<T>(value: T | string): T {
+    if (typeof value === "string") {
+        return JSON.parse(value) as T;
+    }
+
+    return value;
+}
+
 export async function emitEvent(tenant_id: string, event_type: string, data: any) {
     const subs = await q<any>(
         `SELECT subscription_id, url, secret, event_types
@@ -16,9 +24,7 @@ export async function emitEvent(tenant_id: string, event_type: string, data: any
     );
 
     for (const s of subs) {
-        const eventTypes: string[] = Array.isArray(s.event_types)
-            ? s.event_types
-            : JSON.parse(s.event_types);
+        const eventTypes = parseMaybeJson<string[]>(s.event_types);
         if (!eventTypes.includes(event_type)) continue;
 
         const event_id = crypto.randomUUID();
@@ -126,7 +132,7 @@ WHERE d.delivery_id=:delivery_id`,
         if (!dRows.length) continue;
         const d = dRows[0];
 
-        const payloadObj = JSON.parse(d.payload);
+        const payloadObj = parseMaybeJson<any>(d.payload);
         const rawBody = JSON.stringify(payloadObj);
         const sig = signWebhook(d.secret, rawBody);
 
