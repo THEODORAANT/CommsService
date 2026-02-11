@@ -69,6 +69,9 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     type: string;
     author?: string;
 }) {
+    console.log("postOrderNoteToPharmacy");
+    console.log(orderNumber);
+    console.log(payload);
     const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${orderNumber}/notes`, {
         method: "POST",
         headers: {
