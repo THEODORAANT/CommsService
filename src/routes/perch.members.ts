@@ -198,43 +198,105 @@ perchMembers.post(
 );
 
 perchMembers.get(
+    "/v1/perch/members/notes",
+    authedHandler(async (req, res) => {
+        const tenant_id = req.tenant_id;
+        const scope = (req.query.scope as string) || "patient";
+
+        const notes = await q<any>(
+            `SELECT * FROM notes
+       WHERE tenant_id=:tenant_id
+         AND (${scope === "patient" ? "scope='patient'" : "1=1"})
+       ORDER BY memberID ASC, created_at DESC
+       LIMIT 2000`,
+            { tenant_id }
+        );
+
+        const noteIds = notes.map((n: any) => n.note_id);
+        let replies: any[] = [];
+        if (noteIds.length) {
+            const placeholders = noteIds.map((_: any, i: number) => `:id${i}`).join(",");
+            const params: any = { tenant_id };
+            noteIds.forEach((id: string, i: number) => (params[`id${i}`] = id));
+            replies = await q<any>(
+                `SELECT * FROM note_replies
+         WHERE tenant_id=:tenant_id AND note_id IN (${placeholders})
+         ORDER BY created_at ASC`,
+                params
+            );
+        }
+
+        const repliesBy = new Map<string, any[]>();
+        for (const r of replies) {
+            const arr = repliesBy.get(r.note_id) || [];
+            arr.push(r);
+            repliesBy.set(r.note_id, arr);
+        }
+
+        const notesByMember = new Map<number, any[]>();
+        for (const note of notes) {
+            const memberNotes = notesByMember.get(note.memberID) || [];
+            memberNotes.push({ ...note, replies: repliesBy.get(note.note_id) || [] });
+            notesByMember.set(note.memberID, memberNotes);
+        }
+
+        const items = Array.from(notesByMember.entries()).map(([memberID, memberNotes]) => ({
+            memberID,
+            notes: memberNotes
+        }));
+
+        res.json({ items, next_cursor: null });
+    })
+);
+
+perchMembers.get(
     "/v1/perch/members/:memberID/notes",
     authedHandler(async (req, res) => {
         const tenant_id = req.tenant_id;
         const memberID = Number(req.params.memberID);
         const scope = (req.query.scope as string) || "patient";
 
-    const notes = await q<any>(
-        `SELECT * FROM notes
-     WHERE tenant_id=:tenant_id AND memberID=:memberID
-       AND (${scope === "patient" ? "scope='patient'" : "1=1"})
-     ORDER BY created_at DESC
-     LIMIT 200`,
-        { tenant_id, memberID }
-    );
-
-    const noteIds = notes.map((n: any) => n.note_id);
-    let replies: any[] = [];
-    if (noteIds.length) {
-        const placeholders = noteIds.map((_: any, i: number) => `:id${i}`).join(",");
-        const params: any = { tenant_id };
-        noteIds.forEach((id: string, i: number) => (params[`id${i}`] = id));
-        replies = await q<any>(
-            `SELECT * FROM note_replies
-       WHERE tenant_id=:tenant_id AND note_id IN (${placeholders})
-       ORDER BY created_at ASC`,
-            params
+        const notes = await q<any>(
+            `SELECT * FROM notes
+       WHERE tenant_id=:tenant_id AND memberID=:memberID
+         AND (${scope === "patient" ? "scope='patient'" : "1=1"})
+       ORDER BY created_at DESC
+       LIMIT 200`,
+            { tenant_id, memberID }
         );
-    }
 
-    const repliesBy = new Map<string, any[]>();
-    for (const r of replies) {
-        const arr = repliesBy.get(r.note_id) || [];
-        arr.push(r);
-        repliesBy.set(r.note_id, arr);
-    }
+        const noteIds = notes.map((n: any) => n.note_id);
+        let replies: any[] = [];
+        if (noteIds.length) {
+            const placeholders = noteIds.map((_: any, i: number) => `:id${i}`).join(",");
+            const params: any = { tenant_id };
+            noteIds.forEach((id: string, i: number) => (params[`id${i}`] = id));
+            replies = await q<any>(
+                `SELECT * FROM note_replies
+         WHERE tenant_id=:tenant_id AND note_id IN (${placeholders})
+         ORDER BY created_at ASC`,
+                params
+            );
+        }
 
-        res.json({ items: notes.map((n: any) => ({ ...n, replies: repliesBy.get(n.note_id) || [] })), next_cursor: null });
+        const repliesBy = new Map<string, any[]>();
+        for (const r of replies) {
+            const arr = repliesBy.get(r.note_id) || [];
+            arr.push(r);
+            repliesBy.set(r.note_id, arr);
+        }
+
+        const memberNotes = notes.map((n: any) => ({ ...n, replies: repliesBy.get(n.note_id) || [] }));
+
+        res.json({
+            items: [
+                {
+                    memberID,
+                    notes: memberNotes
+                }
+            ],
+            next_cursor: null
+        });
     })
 );
 
