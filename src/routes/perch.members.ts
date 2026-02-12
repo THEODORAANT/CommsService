@@ -259,12 +259,12 @@ perchMembers.get(
         const notes = await q<any>(
             `SELECT * FROM notes
        WHERE tenant_id=:tenant_id AND memberID=:memberID
-         AND (${scope === "patient" ? "scope='patient'" : "1=1"})
+        
        ORDER BY created_at DESC
        LIMIT 200`,
             { tenant_id, memberID }
         );
-
+// AND (${scope === "patient" ? "scope='patient'" : "1=1"})
         const noteIds = notes.map((n: any) => n.note_id);
         let replies: any[] = [];
         if (noteIds.length) {

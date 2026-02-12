@@ -87,3 +87,19 @@ aud:'comms-service'
 
 ## Pharmacy webhooks
 See [docs/pharmacy-webhooks.md](docs/pharmacy-webhooks.md) for Pharmacy-facing webhook subscription and payload details.
+curl --request POST 'https://gwlcomms.azurewebsites.net/v1/notes/ede3aa88-c33c-41b1-b031-37219ddd0eab/replies' \
+--header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZW5hbnRfaWQiOiJnd2wtY3kiLCJhY3RvciI6eyJyb2xlIjoiYWRtaW4iLCJ1c2VyX2lkIjoiY2xpIiwiZGlzcGxheV9uYW1lIjoiQ0xJIn0sImlzcyI6InBlcmNoIiwiYXVkIjoiY29tbXMtc2VydmljZSIsImlhdCI6MTc3MDg5NDc2MCwiZXhwIjoxNzcwODk4MzYwfQ.-Mb3s68ykY1Rslrh8Zn4-nC94kpsAcQT2ET_22vvMYo' \
+--header 'X-Tenant-Id: gwl-cy' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+"body": "Replying in-thread to the note.",
+"created_by": {
+"role": "pharmacist",
+"user_id": "pharm_u123",
+"display_name": "Dr Pharmacist"
+}
+}'
+curl --request GET 'https://gwlcomms.azurewebsites.net/v1/perch/members/427/notes' \
+--header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0ZW5hbnRfaWQiOiJnd2wtY3kiLCJhY3RvciI6eyJyb2xlIjoiYWRtaW4iLCJ1c2VyX2lkIjoiY2xpIiwiZGlzcGxheV9uYW1lIjoiQ0xJIn0sImlzcyI6InBlcmNoIiwiYXVkIjoiY29tbXMtc2VydmljZSIsImlhdCI6MTc3MDkwNzAyNSwiZXhwIjoxNzcwOTEwNjI1fQ.weSA5bqdlJ0IKZsLr1PCMwhFxre2QjCggLLbK-nNjK4' \
+--header 'X-Tenant-Id: gwl-cy'
+
