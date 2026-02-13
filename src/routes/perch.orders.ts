@@ -495,6 +495,16 @@ perchOrders.post(
                 author: body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role
             });
 
+            const pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
+            if (pharmacyNoteId) {
+                await q(
+                    `UPDATE notes
+           SET external_note_ref=:external_note_ref
+           WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+                    { tenant_id, note_id, external_note_ref: pharmacyNoteId }
+                );
+            }
+
             return {
                 note_id,
                 thread_root_id: note_id,
@@ -504,7 +514,7 @@ perchOrders.post(
                 note_type: body.note_type,
                 status,
                 created_at: new Date().toISOString(),
-                pharmacy_note_id: pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null,
+                pharmacy_note_id: pharmacyNoteId,
                 pharmacy_thread_id: pharmacyResponse.thread_id ?? null
             };
         });

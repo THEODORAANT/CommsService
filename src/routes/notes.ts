@@ -5,6 +5,7 @@ import { q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
+import { config } from "../config.js";
 
 export const notesRoutes = Router();
 
@@ -26,6 +27,43 @@ const ReplySchema = z.object({
     external_reply_ref: z.string().optional().nullable()
 });
 
+const pharmacyRoleByActorRole: Record<string, string> = {
+    admin: "ADMIN",
+    pharmacist: "PHARMACIST",
+    patient: "PATIENT",
+    system: "SYSTEM"
+};
+
+async function createPharmacyNoteReply(noteId: string, payload: {
+    body: string;
+    created_by: {
+        role: string;
+        user_id?: string;
+        display_name?: string;
+    };
+}) {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/notes/${noteId}/replies`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        const err: any = new Error(`Pharmacy API error: ${resp.status}`);
+        err.status = 502;
+        throw err;
+    }
+
+    return await resp.json() as {
+        note_reply_id?: string;
+        note_id?: string;
+        created_at?: string;
+    };
+}
+
 notesRoutes.post(
     "/v1/notes/:note_id/replies",
     authedHandler(async (req, res) => {
@@ -38,7 +76,7 @@ notesRoutes.post(
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { note_id, ...body }, async () => {
             const rows = await q<any>(
-                `SELECT memberID, orderID FROM notes WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+                `SELECT memberID, orderID, external_note_ref FROM notes WHERE tenant_id=:tenant_id AND note_id=:note_id`,
                 { tenant_id, note_id }
             );
             if (!rows.length) {
@@ -68,6 +106,31 @@ notesRoutes.post(
                     ext: body.external_reply_ref ?? null
                 }
             );
+
+            const pharmacyNoteId = rows[0].external_note_ref as string | null;
+            if (pharmacyNoteId) {
+                const pharmacyReply = await createPharmacyNoteReply(pharmacyNoteId, {
+                    body: body.body,
+                    created_by: {
+                        role: pharmacyRoleByActorRole[body.created_by.role] ?? "ADMIN",
+                        user_id: body.created_by.user_id,
+                        display_name: body.created_by.display_name
+                    }
+                });
+
+                if (pharmacyReply.note_reply_id && !body.external_reply_ref) {
+                    await q(
+                        `UPDATE note_replies
+             SET external_reply_ref=:external_reply_ref
+             WHERE tenant_id=:tenant_id AND note_reply_id=:note_reply_id`,
+                        {
+                            tenant_id,
+                            note_reply_id,
+                            external_reply_ref: pharmacyReply.note_reply_id
+                        }
+                    );
+                }
+            }
 
             await emitEvent(tenant_id, "note.reply.created", {
                 note_id,
