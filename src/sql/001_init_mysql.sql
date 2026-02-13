@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS notes (
   created_by_user_id VARCHAR(255) NULL,
   created_by_display_name VARCHAR(255) NULL,
   external_note_ref VARCHAR(255) NULL,
+  external_thread_ref VARCHAR(255) NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   KEY idx_notes_member (tenant_id, memberID, created_at),

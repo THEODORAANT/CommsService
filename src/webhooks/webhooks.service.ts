@@ -105,6 +105,7 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
 
     return await resp.json() as {
         pharmacy_note_id?: string;
+        thread_id?: string;
         note?: { _id?: string };
     };
 }
@@ -204,15 +205,18 @@ WHERE d.delivery_id=:delivery_id`,
                         });
 
                         const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
+                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
                         if (pharmacyNoteId) {
                             await q(
                                 `UPDATE notes
-                   SET external_note_ref=:external_note_ref
+                   SET external_note_ref=:external_note_ref,
+                       external_thread_ref=:external_thread_ref
                    WHERE tenant_id=:tenant_id AND note_id=:note_id`,
                                 {
                                     tenant_id: d.tenant_id,
                                     note_id: payloadObj?.data?.note_id,
-                                    external_note_ref: pharmacyNoteId
+                                    external_note_ref: pharmacyNoteId,
+                                    external_thread_ref: pharmacyThreadId
                                 }
                             );
                         }
