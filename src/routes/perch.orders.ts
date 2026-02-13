@@ -92,6 +92,13 @@ type PharmacyOrderNoteResponse = {
     thread_id?: string;
 };
 
+type PharmacyOrderStatusResponse = {
+    success: boolean;
+    orderNumber?: string;
+    status?: string;
+    message?: string;
+};
+
 const pharmacyNoteTypeMap: Record<string, string> = {
     admin_note: "ADMIN",
     clinical_note: "CLINICAL"
@@ -144,6 +151,26 @@ async function createPharmacyOrder(payload: z.infer<typeof OrderCreateSchema>): 
     }
 
     return orderNumber;
+}
+
+async function updatePharmacyOrderStatus(payload: {
+    orderNumber: string;
+    status: z.infer<typeof UpdateOrderStatusSchema>["status"];
+}): Promise<PharmacyOrderStatusResponse> {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${payload.orderNumber}/status`, {
+        method: "PATCH",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ status: payload.status })
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    return (await resp.json()) as PharmacyOrderStatusResponse;
 }
 
 perchOrders.post(
@@ -273,6 +300,13 @@ perchOrders.post(
 
             const order = rows[0];
             const currentStatus = String(order.status ?? "").toUpperCase();
+            const pharmacyOrderRef = order.pharmacy_order_ref as string | null;
+
+            if (!pharmacyOrderRef) {
+                const err: any = new Error("Order is missing pharmacy_order_ref. Link the order with pharmacy_order_ref first.");
+                err.status = 422;
+                throw err;
+            }
 
             if (orderLockedStatuses.has(currentStatus)) {
                 const err: any = new Error(`Order status is locked from ${currentStatus}`);
@@ -299,6 +333,11 @@ perchOrders.post(
                 }
             );
 
+            await updatePharmacyOrderStatus({
+                orderNumber: pharmacyOrderRef,
+                status: body.status
+            });
+
             if (body.status === "PENDING") {
                 await connection.query(
                     `INSERT INTO order_work_queue(tenant_id, orderID, order_number, status)
@@ -309,7 +348,7 @@ perchOrders.post(
                     {
                         tenant_id,
                         orderID,
-                        order_number: order.pharmacy_order_ref ?? String(orderID)
+                        order_number: pharmacyOrderRef
                     }
                 );
             }
@@ -325,7 +364,7 @@ perchOrders.post(
                     {
                         tenant_id,
                         orderID,
-                        order_number: order.pharmacy_order_ref ?? String(orderID),
+                        order_number: pharmacyOrderRef,
                         refund_reason: body.reason ?? null
                     }
                 );
