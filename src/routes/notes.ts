@@ -30,22 +30,29 @@ notesRoutes.post(
     "/v1/notes/:note_id/replies",
     authedHandler(async (req, res) => {
         const tenant_id = req.tenant_id;
-        const note_id = req.params.note_id;
+        const note_lookup_id = req.params.note_id;
         const idem = req.header("Idempotency-Key") || undefined;
 
         const body = ReplySchema.parse(req.body);
         const endpoint = "/v1/notes/:note_id/replies";
 
-        const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { note_id, ...body }, async () => {
+        const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { note_id: note_lookup_id, ...body }, async () => {
             const rows = await q<any>(
-                `SELECT memberID, orderID FROM notes WHERE tenant_id=:tenant_id AND note_id=:note_id`,
-                { tenant_id, note_id }
+                `SELECT note_id, memberID, orderID
+                 FROM notes
+                 WHERE tenant_id=:tenant_id
+                   AND (note_id=:note_lookup_id OR external_note_ref=:note_lookup_id)
+                 ORDER BY CASE WHEN external_note_ref=:note_lookup_id THEN 0 ELSE 1 END
+                 LIMIT 1`,
+                { tenant_id, note_lookup_id }
             );
             if (!rows.length) {
                 const err: any = new Error("Note not found");
                 err.status = 404;
                 throw err;
             }
+
+            const note_id = String(rows[0].note_id);
 
             const note_reply_id = crypto.randomUUID();
 
@@ -77,7 +84,7 @@ notesRoutes.post(
                 orderID: rows[0].orderID ? Number(rows[0].orderID) : null
             });
 
-            return { note_reply_id, note_id, created_at: new Date().toISOString() };
+            return { note_reply_id, note_id: note_lookup_id, created_at: new Date().toISOString() };
         });
 
         res.setHeader("X-Idempotency-Replayed", String(replayed));

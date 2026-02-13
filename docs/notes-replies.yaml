@@ -6,7 +6,7 @@ paths:
   /v1/notes/{note_id}/replies:
     post:
       summary: Create a reply on an existing note
-      description: Creates a note reply and emits a note.reply.created event.
+      description: Creates a note reply and emits a note.reply.created event. The `note_id` path value can be either the Comms `note_id` or the Pharmacy note id stored in `external_note_ref`.
       security:
         - bearerAuth: []
       parameters:
