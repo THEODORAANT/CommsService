@@ -70,6 +70,13 @@ const pharmacyNoteTypeMap: Record<string, string> = {
     clinical_note: "CLINICAL"
 };
 
+const pharmacyActorRoleMap: Record<string, string> = {
+    admin: "ADMIN",
+    pharmacist: "PHARMACIST",
+    patient: "PATIENT",
+    system: "SYSTEM"
+};
+
 async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     body: string;
     type: string;
@@ -95,6 +102,37 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
+
+    return await resp.json() as {
+        pharmacy_note_id?: string;
+        note?: { _id?: string };
+    };
+}
+
+async function postNoteReplyToPharmacy(noteId: string, payload: {
+    body: string;
+    created_by: {
+        role: string;
+        user_id?: string;
+        display_name?: string;
+    };
+}) {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/notes/${noteId}/replies`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    return await resp.json() as {
+        note_reply_id?: string;
+    };
 }
 
 export async function processWebhookBatch(limit = 50) {
@@ -146,10 +184,11 @@ WHERE d.delivery_id=:delivery_id`,
 
         try {
             if (d.subscriber_system === "pharmacy") {
-                const noteScope = payloadObj?.data?.scope;
-                if (payloadObj?.event_type !== "note.created" || noteScope !== "order") {
-                    ok = true; // pharmacy only accepts order-scoped note.created events
-                } else {
+                if (payloadObj?.event_type === "note.created") {
+                    const noteScope = payloadObj?.data?.scope;
+                    if (noteScope !== "order") {
+                        ok = true; // pharmacy only accepts order-scoped note.created events
+                    } else {
                     const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
                     // Optional filter: push only admin_note
@@ -158,13 +197,52 @@ WHERE d.delivery_id=:delivery_id`,
                         ok = true; // treat as success (intentionally skipped)
                     } else {
                         console.log("postOrderNoteToPharmacy here");
-                        await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
+                        const pharmacyResp = await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
                             body: pharmacyPayload.body,
                             type: pharmacyPayload.type,
                             author: pharmacyPayload.author
                         });
+
+                        const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
+                        if (pharmacyNoteId) {
+                            await q(
+                                `UPDATE notes
+                   SET external_note_ref=:external_note_ref
+                   WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+                                {
+                                    tenant_id: d.tenant_id,
+                                    note_id: payloadObj?.data?.note_id,
+                                    external_note_ref: pharmacyNoteId
+                                }
+                            );
+                        }
                         ok = true;
                     }
+                }
+                } else if (payloadObj?.event_type === "note.reply.created") {
+                    const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
+
+                    const pharmacyReplyResp = await postNoteReplyToPharmacy(pharmacyReplyPayload.pharmacy_note_id, {
+                        body: pharmacyReplyPayload.body,
+                        created_by: pharmacyReplyPayload.created_by
+                    });
+
+                    if (pharmacyReplyResp.note_reply_id && !pharmacyReplyPayload.external_reply_ref) {
+                        await q(
+                            `UPDATE note_replies
+               SET external_reply_ref=:external_reply_ref
+               WHERE tenant_id=:tenant_id AND note_reply_id=:note_reply_id`,
+                            {
+                                tenant_id: d.tenant_id,
+                                note_reply_id: pharmacyReplyPayload.note_reply_id,
+                                external_reply_ref: pharmacyReplyResp.note_reply_id
+                            }
+                        );
+                    }
+
+                    ok = true;
+                } else {
+                    ok = true;
                 }
             } else {
                 const resp = await fetch(d.url, {
@@ -212,6 +290,69 @@ WHERE d.delivery_id=:delivery_id`,
     }
 
     return { processed: due.length };
+}
+
+async function buildPharmacyNoteReplyPayload(tenant_id: string, payloadObj: any) {
+    if (payloadObj.event_type !== "note.reply.created") {
+        const err: any = new Error("Unsupported pharmacy event type");
+        err.status = 400;
+        throw err;
+    }
+
+    const note_id = payloadObj?.data?.note_id;
+    const note_reply_id = payloadObj?.data?.note_reply_id;
+    if (!note_id || !note_reply_id) {
+        const err: any = new Error("Pharmacy requires note_id and note_reply_id for note.reply.created events");
+        err.status = 400;
+        throw err;
+    }
+
+    const noteRows = await q<any>(
+        `SELECT scope, external_note_ref
+     FROM notes
+     WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+        { tenant_id, note_id }
+    );
+
+    if (!noteRows.length || noteRows[0].scope !== "order") {
+        const err: any = new Error("Pharmacy requires order-scoped notes for note.reply.created events");
+        err.status = 400;
+        throw err;
+    }
+
+    const pharmacy_note_id = noteRows[0].external_note_ref as string | null;
+    if (!pharmacy_note_id) {
+        const err: any = new Error(`Missing external_note_ref for note_id=${note_id}.`);
+        err.status = 422;
+        throw err;
+    }
+
+    const replyRows = await q<any>(
+        `SELECT body, created_by_role, created_by_user_id, created_by_display_name, external_reply_ref
+     FROM note_replies
+     WHERE tenant_id=:tenant_id AND note_reply_id=:note_reply_id AND note_id=:note_id`,
+        { tenant_id, note_reply_id, note_id }
+    );
+
+    if (!replyRows.length) {
+        const err: any = new Error("Note reply not found for note_reply_id");
+        err.status = 404;
+        throw err;
+    }
+
+    const r = replyRows[0];
+
+    return {
+        pharmacy_note_id,
+        note_reply_id,
+        body: String(r.body),
+        created_by: {
+            role: pharmacyActorRoleMap[String(r.created_by_role)] ?? "ADMIN",
+            user_id: r.created_by_user_id || undefined,
+            display_name: r.created_by_display_name || undefined
+        },
+        external_reply_ref: r.external_reply_ref as string | null
+    };
 }
 async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any) {
     if (payloadObj.event_type !== "note.created") {

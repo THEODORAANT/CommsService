@@ -69,6 +69,7 @@ notesRoutes.post(
                 }
             );
 
+
             await emitEvent(tenant_id, "note.reply.created", {
                 note_id,
                 note_reply_id,
