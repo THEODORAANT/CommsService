@@ -219,3 +219,77 @@ customerMediaRoutes.post("/api/customers/media", async (req, res, next) => {
         next(err);
     }
 });
+
+customerMediaRoutes.post("/api/customers/media/check", async (req, res, next) => {
+    try {
+        const key = req.header("x-api-key");
+        if (!key || key !== config.pharmacyApiKey) {
+            return res.status(403).json({ success: false, message: "forbidden" });
+        }
+
+        const email = String(req.body?.email || "").trim();
+        const since = req.body?.since ? String(req.body.since).trim() : "";
+
+        if (!email) {
+            return res.status(400).json({ success: false, message: "Customer email is required" });
+        }
+
+        const sinceDate = since ? new Date(since) : null;
+        if (since && (!sinceDate || Number.isNaN(sinceDate.valueOf()))) {
+            return res.status(400).json({ success: false, message: "Invalid since timestamp" });
+        }
+
+        const members = await q<{ memberID: number }>(
+            `SELECT memberID
+               FROM members
+              WHERE tenant_id = :tenant_id
+                AND email = :email
+              LIMIT 1`,
+            {
+                tenant_id: config.tenantDefault,
+                email
+            }
+        );
+
+        if (!members.length) {
+            return res.status(404).json({ success: false, message: "Customer not found" });
+        }
+
+        const docs = await q<{
+            document_id: string;
+            url: string;
+            description: string | null;
+            source_type: "file" | "url";
+            uploaded_at: string;
+        }>(
+            `SELECT document_id, url, description, source_type, uploaded_at
+               FROM customer_media_documents
+              WHERE tenant_id = :tenant_id
+                AND memberID = :memberID
+                ${sinceDate ? "AND uploaded_at > :since" : ""}
+              ORDER BY uploaded_at DESC
+              LIMIT 50`,
+            {
+                tenant_id: config.tenantDefault,
+                memberID: members[0].memberID,
+                since: sinceDate?.toISOString().slice(0, 23).replace("T", " ")
+            }
+        );
+
+        return res.status(200).json({
+            success: true,
+            email,
+            has_media: docs.length > 0,
+            media_count: docs.length,
+            media: docs.map((doc) => ({
+                document_id: doc.document_id,
+                url: doc.url,
+                description: doc.description,
+                source_type: doc.source_type,
+                uploaded_at: doc.uploaded_at
+            }))
+        });
+    } catch (err) {
+        next(err);
+    }
+});
