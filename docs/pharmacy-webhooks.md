@@ -79,3 +79,41 @@ Webhook deliveries are queued and retried with exponential-ish backoff until suc
 * Pharmacy deliveries only process order-scoped `note.created` events and send them to `/api/orders/{orderNumber}/notes`.
 * If you only want admin notes, set `PHARMACY_ONLY_ADMIN_NOTES=true` (default).
 * Make sure linked orders have `orders.pharmacy_order_ref` populated or delivery will fail with a 422-style error.
+
+## 7) Media availability check webhook
+
+Comms Service also exposes a Pharmacy-protected endpoint to check whether a customer has media ready:
+
+* `POST /api/customers/media/check`
+* Headers:
+  * `x-api-key: <PHARMACY_API_KEY>`
+* Body:
+
+```json
+{
+  "email": "customer@example.com",
+  "since": "2026-01-10T00:00:00.000Z"
+}
+```
+
+`since` is optional. When provided, only media uploaded after that timestamp is returned.
+
+Example response:
+
+```json
+{
+  "success": true,
+  "email": "customer@example.com",
+  "has_media": true,
+  "media_count": 1,
+  "media": [
+    {
+      "document_id": "3e1f0a4d-a388-4f95-9a90-b6f91942e0ca",
+      "url": "https://...",
+      "description": "script.jpg",
+      "source_type": "file",
+      "uploaded_at": "2026-01-10T10:00:00.000Z"
+    }
+  ]
+}
+```
