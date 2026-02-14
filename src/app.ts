@@ -5,6 +5,7 @@ import { perchMembers } from "./routes/perch.members.js";
 import { perchOrders } from "./routes/perch.orders.js";
 import { notesRoutes } from "./routes/notes.js";
 import { internalRoutes } from "./routes/internal.js";
+import { customerMediaRoutes } from "./routes/customer.media.js";
 
 export function createApp() {
     const app = express();
@@ -15,6 +16,7 @@ export function createApp() {
 
     // Internal endpoint (protected by X-Worker-Key, no JWT required)
     app.use(internalRoutes);
+    app.use(customerMediaRoutes);
 
     // Everything else requires JWT
     app.use(requireAuth);

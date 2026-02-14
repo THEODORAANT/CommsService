@@ -173,3 +173,18 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   CONSTRAINT fk_webhook_del_sub FOREIGN KEY (subscription_id)
     REFERENCES webhook_subscriptions(subscription_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS customer_media_documents (
+  document_id CHAR(36) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  memberID BIGINT NOT NULL,
+  email VARCHAR(320) NOT NULL,
+  url VARCHAR(2048) NOT NULL,
+  description VARCHAR(255) NULL,
+  source_type ENUM('file','url') NOT NULL,
+  uploaded_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_customer_media_member (tenant_id, memberID, uploaded_at),
+  CONSTRAINT fk_customer_media_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
+  CONSTRAINT fk_customer_media_member FOREIGN KEY (tenant_id, memberID)
+    REFERENCES members(tenant_id, memberID) ON DELETE CASCADE
+) ENGINE=InnoDB;
