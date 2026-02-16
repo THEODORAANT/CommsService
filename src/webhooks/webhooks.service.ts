@@ -115,17 +115,28 @@ const pharmacyActorRoleMap: Record<string, string> = {
 
 async function postCustomerNoteToPharmacy(payload: {
     email: string;
-    body: string;
-    type: string;
+    body?: string;
+    note?: string;
+    type?: string;
     author?: string;
 }) {
+    const resolvedBody = payload.body ?? payload.note;
+    if (!resolvedBody) {
+        throw new Error("Pharmacy customer note requires either body or note.");
+    }
+
     const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/notes`, {
         method: "POST",
         headers: {
             "x-api-key": config.pharmacyApiKey,
             "Content-Type": "application/json"
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+            email: payload.email,
+            body: resolvedBody,
+            type: payload.type ?? "ADMIN",
+            author: payload.author
+        })
     });
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
