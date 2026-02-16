@@ -1,7 +1,8 @@
 import crypto from "crypto";
 
-import { q } from "../db.js";
+import { ordersHasEscalateClinicalReviewColumn, q } from "../db.js";
 import { config } from "../config.js";
+import { sendPharmacyRequest } from "../pharmacy.client.js";
 
 export function signWebhook(secret: string, rawBody: string): string {
     return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
@@ -113,7 +114,7 @@ const pharmacyActorRoleMap: Record<string, string> = {
     system: "SYSTEM"
 };
 
-async function postCustomerNoteToPharmacy(payload: {
+async function postCustomerNoteToPharmacy(tenant_id: string, payload: {
     email: string;
     body?: string;
     note?: string;
@@ -125,24 +126,26 @@ async function postCustomerNoteToPharmacy(payload: {
         throw new Error("Pharmacy customer note requires either body or note.");
     }
 
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/notes`, {
+    const requestPayload = {
+        email: payload.email,
+        body: resolvedBody,
+        type: payload.type ?? "ADMIN",
+        author: payload.author
+    };
+    const resp = await sendPharmacyRequest({
+        tenant_id,
+        operation: "webhook_create_customer_note",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            email: payload.email,
-            body: resolvedBody,
-            type: payload.type ?? "ADMIN",
-            author: payload.author
-        })
+        path: "/api/customers/notes",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return await resp.json() as {
+    return (resp.bodyJson ?? {}) as {
         success?: boolean;
         message?: string;
         pharmacy_note_id?: string;
@@ -158,25 +161,26 @@ async function postCustomerNoteToPharmacy(payload: {
 }
 
 
-async function postOrderNoteToPharmacy(orderNumber: string, payload: {
+async function postOrderNoteToPharmacy(tenant_id: string, orderNumber: string, payload: {
     body: string;
     type: string;
     author?: string;
 }) {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${orderNumber}/notes`, {
+    const resp = await sendPharmacyRequest({
+        tenant_id,
+        operation: "webhook_create_order_note",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        path: `/api/orders/${orderNumber}/notes`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        requestBodyForLog: payload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return await resp.json() as {
+    return (resp.bodyJson ?? {}) as {
         success?: boolean;
         message?: string;
         pharmacy_note_id?: string;
@@ -191,7 +195,7 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     };
 }
 
-async function postNoteReplyToPharmacy(noteId: string, payload: {
+async function postNoteReplyToPharmacy(tenant_id: string, noteId: string, payload: {
     body: string;
     created_by: {
         role: string;
@@ -199,20 +203,21 @@ async function postNoteReplyToPharmacy(noteId: string, payload: {
         display_name?: string;
     };
 }) {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/notes/${noteId}/replies`, {
+    const resp = await sendPharmacyRequest({
+        tenant_id,
+        operation: "webhook_create_note_reply",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        path: `/api/notes/${noteId}/replies`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        requestBodyForLog: payload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return await resp.json() as {
+    return (resp.bodyJson ?? {}) as {
         note_reply_id?: string;
     };
 }
@@ -279,13 +284,13 @@ WHERE d.delivery_id=:delivery_id`,
                         }
 
                         const pharmacyResp = pharmacyPayload.should_send_customer_note
-                            ? await postCustomerNoteToPharmacy({
+                            ? await postCustomerNoteToPharmacy(d.tenant_id, {
                                   email: String(pharmacyPayload.email),
                                   body: pharmacyPayload.body,
                                   type: pharmacyPayload.type,
                                   author: pharmacyPayload.author
                               })
-                            : await postOrderNoteToPharmacy(String(pharmacyPayload.order_number), {
+                            : await postOrderNoteToPharmacy(d.tenant_id, String(pharmacyPayload.order_number), {
                                   body: pharmacyPayload.body,
                                   type: pharmacyPayload.type,
                                   author: pharmacyPayload.author
@@ -301,7 +306,7 @@ WHERE d.delivery_id=:delivery_id`,
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
-                    const pharmacyReplyResp = await postNoteReplyToPharmacy(pharmacyReplyPayload.pharmacy_note_id, {
+                    const pharmacyReplyResp = await postNoteReplyToPharmacy(d.tenant_id, pharmacyReplyPayload.pharmacy_note_id, {
                         body: pharmacyReplyPayload.body,
                         created_by: pharmacyReplyPayload.created_by
                     });
@@ -451,8 +456,12 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
         throw err;
     }
 
+    const hasEscalateClinicalReviewColumn = await ordersHasEscalateClinicalReviewColumn();
+    const escalateClinicalReviewSelect = hasEscalateClinicalReviewColumn
+        ? "escalate_clinical_review"
+        : "0 AS escalate_clinical_review";
     const orderRows = await q<any>(
-        `SELECT pharmacy_order_ref, escalate_clinical_review
+        `SELECT pharmacy_order_ref, ${escalateClinicalReviewSelect}
          FROM orders
          WHERE tenant_id=:tenant_id AND orderID=:orderID`,
         { tenant_id, orderID }

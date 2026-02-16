@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS orders (
   memberID BIGINT NOT NULL,
   pharmacy_order_ref VARCHAR(255) NULL,
   status VARCHAR(64) NULL,
+  escalate_clinical_review TINYINT(1) NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (tenant_id, orderID),
@@ -172,6 +173,22 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   CONSTRAINT fk_webhook_del_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
   CONSTRAINT fk_webhook_del_sub FOREIGN KEY (subscription_id)
     REFERENCES webhook_subscriptions(subscription_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+
+CREATE TABLE IF NOT EXISTS pharmacy_http_logs (
+  log_id CHAR(36) PRIMARY KEY,
+  tenant_id VARCHAR(64) NULL,
+  operation VARCHAR(128) NOT NULL,
+  method VARCHAR(16) NOT NULL,
+  url VARCHAR(2048) NOT NULL,
+  request_body LONGTEXT NULL,
+  response_status INT NULL,
+  response_body LONGTEXT NULL,
+  error_message TEXT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  KEY idx_pharmacy_http_logs_tenant_created (tenant_id, created_at),
+  CONSTRAINT fk_pharmacy_http_logs_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS customer_media_documents (

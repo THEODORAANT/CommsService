@@ -2,11 +2,12 @@ import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 //import fetch from "node-fetch";
-import { pool, q } from "../db.js";
+import { ordersHasEscalateClinicalReviewColumn, pool, q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
 import { config } from "../config.js";
+import { sendPharmacyRequest } from "../pharmacy.client.js";
 
 export const perchOrders = Router();
 
@@ -135,7 +136,7 @@ const pharmacyNoteTypeMap: Record<string, string> = {
     clinical_note: "CLINICAL"
 };
 
-async function createPharmacyCustomerNote(payload: {
+async function createPharmacyCustomerNote(tenant_id: string, payload: {
     email: string;
     body?: string;
     note?: string;
@@ -147,69 +148,74 @@ async function createPharmacyCustomerNote(payload: {
         throw new Error("Pharmacy customer note requires either body or note.");
     }
 
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/notes`, {
+    const requestPayload = {
+        email: payload.email,
+        body: resolvedBody,
+        type: payload.type ?? "ADMIN",
+        author: payload.author ?? undefined
+    };
+    const resp = await sendPharmacyRequest<PharmacyOrderNoteResponse>({
+        tenant_id,
+        operation: "create_customer_note",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            email: payload.email,
-            body: resolvedBody,
-            type: payload.type ?? "ADMIN",
-            author: payload.author ?? undefined
-        })
+        path: "/api/customers/notes",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return (await resp.json()) as PharmacyOrderNoteResponse;
+    return (resp.bodyJson ?? {}) as PharmacyOrderNoteResponse;
 }
 
 
-async function createPharmacyOrderNote(payload: {
+async function createPharmacyOrderNote(tenant_id: string, payload: {
     orderNumber: string;
     body: string;
     type: string;
     author?: string | null;
 }): Promise<PharmacyOrderNoteResponse> {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${payload.orderNumber}/notes`, {
+    const requestPayload = {
+        body: payload.body,
+        type: payload.type,
+        author: payload.author ?? undefined
+    };
+    const resp = await sendPharmacyRequest<PharmacyOrderNoteResponse>({
+        tenant_id,
+        operation: "create_order_note",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-            body: payload.body,
-            type: payload.type,
-            author: payload.author ?? undefined
-        })
+        path: `/api/orders/${payload.orderNumber}/notes`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return (await resp.json()) as PharmacyOrderNoteResponse;
+    return (resp.bodyJson ?? {}) as PharmacyOrderNoteResponse;
 }
 
-async function createPharmacyOrder(payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/create`, {
+async function createPharmacyOrder(tenant_id: string, payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
+    const resp = await sendPharmacyRequest<PharmacyOrderCreateResponse>({
+        tenant_id,
+        operation: "create_order",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        path: "/api/orders/create",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        requestBodyForLog: payload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    const data = (await resp.json()) as PharmacyOrderCreateResponse;
+    const data = (resp.bodyJson ?? {}) as PharmacyOrderCreateResponse;
     const orderNumber = data?.orderNumber;
     if (!orderNumber) {
         throw new Error("Pharmacy API missing orderNumber");
@@ -218,24 +224,26 @@ async function createPharmacyOrder(payload: z.infer<typeof OrderCreateSchema>): 
     return orderNumber;
 }
 
-async function updatePharmacyOrderStatus(payload: {
+async function updatePharmacyOrderStatus(tenant_id: string, payload: {
     orderNumber: string;
     status: z.infer<typeof UpdateOrderStatusSchema>["status"];
 }): Promise<PharmacyOrderStatusResponse> {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${payload.orderNumber}/status`, {
+    const requestPayload = { status: payload.status };
+    const resp = await sendPharmacyRequest<PharmacyOrderStatusResponse>({
+        tenant_id,
+        operation: "update_order_status",
         method: "PATCH",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ status: payload.status })
+        path: `/api/orders/${payload.orderNumber}/status`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    return (await resp.json()) as PharmacyOrderStatusResponse;
+    return (resp.bodyJson ?? {}) as PharmacyOrderStatusResponse;
 }
 
 perchOrders.post(
@@ -260,7 +268,7 @@ perchOrders.post(
             }
             const memberID = Number(memberRows[0].memberID);
 
-            const pharmacyOrderNumber = await createPharmacyOrder(body);
+            const pharmacyOrderNumber = await createPharmacyOrder(tenant_id, body);
 
             await q(
                 `INSERT INTO orders(tenant_id, orderID, memberID, pharmacy_order_ref, status)
@@ -398,7 +406,7 @@ perchOrders.post(
                 }
             );
 
-            await updatePharmacyOrderStatus({
+            await updatePharmacyOrderStatus(tenant_id, {
                 orderNumber: pharmacyOrderRef,
                 status: body.status
             });
@@ -505,8 +513,12 @@ perchOrders.post(
         const endpoint = "/v1/perch/orders/:orderID/notes";
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
+            const hasEscalateClinicalReviewColumn = await ordersHasEscalateClinicalReviewColumn();
+            const escalateClinicalReviewSelect = hasEscalateClinicalReviewColumn
+                ? "o.escalate_clinical_review"
+                : "0 AS escalate_clinical_review";
             const rows = await q<any>(
-                `SELECT o.memberID, o.pharmacy_order_ref, o.escalate_clinical_review, m.email
+                `SELECT o.memberID, o.pharmacy_order_ref, ${escalateClinicalReviewSelect}, m.email
                  FROM orders o
                  LEFT JOIN members m ON m.tenant_id=o.tenant_id AND m.memberID=o.memberID
                  WHERE o.tenant_id=:tenant_id AND o.orderID=:orderID`,
@@ -584,7 +596,7 @@ perchOrders.post(
                     throw err;
                 }
 
-                const pharmacyResponse = await createPharmacyCustomerNote({
+                const pharmacyResponse = await createPharmacyCustomerNote(tenant_id, {
                     email: memberEmail,
                     body: body.body,
                     type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
@@ -600,7 +612,7 @@ perchOrders.post(
                     throw err;
                 }
 
-                const pharmacyResponse = await createPharmacyOrderNote({
+                const pharmacyResponse = await createPharmacyOrderNote(tenant_id, {
                     orderNumber: pharmacyOrderRef,
                     body: body.body,
                     type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
