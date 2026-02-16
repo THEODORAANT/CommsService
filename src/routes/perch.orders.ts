@@ -515,7 +515,10 @@ perchOrders.post(
             const pharmacyOrderRef = rows[0].pharmacy_order_ref as string | null;
             const memberEmail = rows[0].email as string | null;
             const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
-            const shouldSendCustomerNote = isEscalatedClinicalReview && body.created_by.role === "patient";
+            const isPatientNote = body.created_by.role === "patient";
+            const isOrderTypeRelated = body.note_type === "admin_note" || body.note_type === "clinical_note";
+            const shouldForwardToPharmacy = isOrderTypeRelated || (isPatientNote && isEscalatedClinicalReview);
+            const shouldSendCustomerNote = isPatientNote && isEscalatedClinicalReview;
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";
 
@@ -550,6 +553,24 @@ perchOrders.post(
             let pharmacyNoteId: string | null = null;
             let pharmacyThreadId: string | null = null;
             const noteAuthor = body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role;
+            if (!shouldForwardToPharmacy) {
+                return {
+                    note_id,
+                    memberID,
+                    orderID,
+                    scope: "order",
+                    note_type: body.note_type,
+                    title: body.title ?? null,
+                    body: body.body,
+                    status,
+                    created_by: body.created_by,
+                    external_note_ref: body.external_note_ref ?? null,
+                    created_at: new Date().toISOString(),
+                    pharmacy_note_id: null,
+                    pharmacy_thread_id: null
+                };
+            }
+
             if (shouldSendCustomerNote) {
                 if (!memberEmail) {
                     const err: any = new Error("Member email is required to create a customer note in pharmacy.");

@@ -239,6 +239,11 @@ WHERE d.delivery_id=:delivery_id`,
                     } else {
                         const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
+                        if (!pharmacyPayload.should_forward_to_pharmacy) {
+                            ok = true;
+                            continue;
+                        }
+
                         const pharmacyResp = pharmacyPayload.should_send_customer_note
                             ? await postCustomerNoteToPharmacy({
                                   email: String(pharmacyPayload.email),
@@ -443,6 +448,21 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
 
     const isEscalatedClinicalReview = Number(orderRows[0].escalate_clinical_review ?? 0) === 1;
     const isPatientNote = String(n.created_by_role) === "patient";
+    const isOrderTypeRelated = String(n.note_type) === "admin_note" || String(n.note_type) === "clinical_note";
+    const shouldForwardToPharmacy = isOrderTypeRelated || (isPatientNote && isEscalatedClinicalReview);
+
+    if (!shouldForwardToPharmacy) {
+        return {
+            order_number: null,
+            email: null,
+            body: String(n.body),
+            type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
+            author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
+            note_type: n.note_type,
+            should_send_customer_note: false,
+            should_forward_to_pharmacy: false
+        };
+    }
 
     const orderNumber = orderRows[0].pharmacy_order_ref as string | null;
     const shouldSendCustomerNote = isEscalatedClinicalReview && isPatientNote;
@@ -466,6 +486,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
         type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
         author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
         note_type: n.note_type,
-        should_send_customer_note: shouldSendCustomerNote
+        should_send_customer_note: shouldSendCustomerNote,
+        should_forward_to_pharmacy: true
     };
 }
