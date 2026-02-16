@@ -39,9 +39,11 @@ INSERT INTO webhook_subscriptions (
 );
 ```
 
-## 2) Pharmacy API request
+## 2) Pharmacy API requests
 
-For `subscriber_system = 'pharmacy'`, Comms Service calls Pharmacy's Add Order Note API:
+For `subscriber_system = 'pharmacy'`, Comms Service can call one of the following Pharmacy note endpoints depending on note context:
+
+### A) Order note creation
 
 * `POST /api/orders/{orderNumber}/notes`
 * Headers:
@@ -52,6 +54,45 @@ For `subscriber_system = 'pharmacy'`, Comms Service calls Pharmacy's Add Order N
 ```json
 {
   "body": "Patient requires follow-up call.",
+  "type": "ADMIN",
+  "author": "Dr. Smith"
+}
+```
+
+### B) Customer note creation (for third-party callers)
+
+* `POST /api/customers/notes`
+* Headers:
+  * `x-api-key: <PHARMACY_API_KEY>`
+  * `Content-Type: application/json`
+* Allowed request fields:
+  * `email` (`string`, required): customer email address.
+  * `body` (`string`, required*) or `note` (`string`, required* alias): note content.
+  * `type` (`string`, optional): `ADMIN`, `CLINICAL`, `COMPLAINT` (defaults to `ADMIN`).
+  * `author` (`string`, optional): author display name.
+
+`*` Either `body` or `note` is required.
+
+Example `curl` request:
+
+```bash
+curl -X POST "https://<pharmacy-base-url>/api/customers/notes" \
+  -H "x-api-key: <PHARMACY_API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "customer@example.com",
+    "body": "Patient asked for callback about side effects.",
+    "type": "ADMIN",
+    "author": "Dr. Smith"
+  }'
+```
+
+If you use the alias field:
+
+```json
+{
+  "email": "customer@example.com",
+  "note": "Patient asked for callback about side effects.",
   "type": "ADMIN",
   "author": "Dr. Smith"
 }
