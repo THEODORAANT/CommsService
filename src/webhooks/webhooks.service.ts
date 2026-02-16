@@ -106,19 +106,13 @@ const pharmacyActorRoleMap: Record<string, string> = {
     system: "SYSTEM"
 };
 
-async function postOrderNoteToPharmacy(orderNumber: string, payload: {
+async function postCustomerNoteToPharmacy(payload: {
+    email: string;
     body: string;
     type: string;
     author?: string;
 }) {
-    console.log("postOrderNoteToPharmacy");
-    console.log(orderNumber);
-    console.log(payload);
-    console.log("pharmacyApiBaseUrl");
-    console.log(config.pharmacyApiBaseUrl);
-    console.log("pharmacyApiKey");
-    console.log(config.pharmacyApiKey);
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${orderNumber}/notes`, {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/notes`, {
         method: "POST",
         headers: {
             "x-api-key": config.pharmacyApiKey,
@@ -126,8 +120,6 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
         },
         body: JSON.stringify(payload)
     });
-    console.log("resp");
-    console.log(resp);
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
@@ -219,28 +211,26 @@ WHERE d.delivery_id=:delivery_id`,
                     if (noteScope !== "order") {
                         ok = true; // pharmacy only accepts order-scoped note.created events
                     } else {
-                    const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
+                        const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
-                    // Optional filter: push only admin_note
-                    const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
-                    if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
-                        ok = true; // treat as success (intentionally skipped)
-                    } else {
-                        console.log("postOrderNoteToPharmacy here");
-                        const pharmacyResp = await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
-                            body: pharmacyPayload.body,
-                            type: pharmacyPayload.type,
-                            author: pharmacyPayload.author
-                        });
+                        if (!pharmacyPayload.should_send_to_pharmacy) {
+                            ok = true; // intentionally skipped unless escalated clinical review + patient-authored note
+                        } else {
+                            const pharmacyResp = await postCustomerNoteToPharmacy({
+                                email: pharmacyPayload.email,
+                                body: pharmacyPayload.body,
+                                type: pharmacyPayload.type,
+                                author: pharmacyPayload.author
+                            });
 
-                        const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
-                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
-                        if (pharmacyNoteId) {
-                            await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                            const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
+                            const pharmacyThreadId = pharmacyResp.thread_id ?? null;
+                            if (pharmacyNoteId) {
+                                await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                            }
+                            ok = true;
                         }
-                        ok = true;
                     }
-                }
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
@@ -395,21 +385,23 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     }
 
     const orderRows = await q<any>(
-        `SELECT pharmacy_order_ref FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+        `SELECT escalate_clinical_review
+         FROM orders
+         WHERE tenant_id=:tenant_id AND orderID=:orderID`,
         { tenant_id, orderID }
     );
 
-    const order_number = orderRows?.[0]?.pharmacy_order_ref;
-    if (!order_number) {
-        const err: any = new Error(`Missing pharmacy_order_ref for orderID=${orderID}.`);
-        err.status = 422;
+    if (!orderRows.length) {
+        const err: any = new Error(`Order not found for orderID=${orderID}.`);
+        err.status = 404;
         throw err;
     }
 
     const noteRows = await q<any>(
-        `SELECT note_type, body, created_by_role, created_by_user_id, created_by_display_name
-     FROM notes
-     WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+        `SELECT n.note_type, n.body, n.created_by_role, n.created_by_user_id, n.created_by_display_name, m.email
+     FROM notes n
+     LEFT JOIN members m ON m.tenant_id=n.tenant_id AND m.memberID=n.memberID
+     WHERE n.tenant_id=:tenant_id AND n.note_id=:note_id`,
         { tenant_id, note_id }
     );
 
@@ -421,11 +413,21 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
 
     const n = noteRows[0];
 
+    const isEscalatedClinicalReview = Number(orderRows[0].escalate_clinical_review ?? 0) === 1;
+    const isPatientNote = String(n.created_by_role) === "patient";
+
+    if (!n.email) {
+        const err: any = new Error("Member email is required to create customer note in pharmacy.");
+        err.status = 422;
+        throw err;
+    }
+
     return {
-        order_number: String(order_number),
+        email: String(n.email),
         body: String(n.body),
         type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
         author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
-        note_type: n.note_type
+        note_type: n.note_type,
+        should_send_to_pharmacy: isEscalatedClinicalReview && isPatientNote
     };
 }
