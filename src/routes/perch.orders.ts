@@ -472,7 +472,9 @@ perchOrders.post(
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
             const rows = await q<any>(
-                `SELECT memberID, pharmacy_order_ref FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+                `SELECT memberID, pharmacy_order_ref, escalate_clinical_review
+                 FROM orders
+                 WHERE tenant_id=:tenant_id AND orderID=:orderID`,
                 { tenant_id, orderID }
             );
             if (!rows.length) {
@@ -482,6 +484,8 @@ perchOrders.post(
             }
             const memberID = Number(rows[0].memberID);
             const pharmacyOrderRef = rows[0].pharmacy_order_ref as string | null;
+            const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
+            const shouldSendToPharmacy = isEscalatedClinicalReview && body.created_by.role === "patient";
             if (!pharmacyOrderRef) {
                 const err: any = new Error("Order is missing pharmacy_order_ref. Link the order with pharmacy_order_ref first.");
                 err.status = 422;
@@ -519,17 +523,21 @@ perchOrders.post(
 
             await emitEvent(tenant_id, "note.created", { note_id, memberID, orderID, scope: "order" });
 
-            const pharmacyResponse = await createPharmacyOrderNote({
-                orderNumber: pharmacyOrderRef,
-                body: body.body,
-                type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
-                author: body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role
-            });
+            let pharmacyNoteId: string | null = null;
+            let pharmacyThreadId: string | null = null;
+            if (shouldSendToPharmacy) {
+                const pharmacyResponse = await createPharmacyOrderNote({
+                    orderNumber: pharmacyOrderRef,
+                    body: body.body,
+                    type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
+                    author: body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role
+                });
 
-            const pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
-            const pharmacyThreadId = pharmacyResponse.thread_id ?? null;
-            if (pharmacyNoteId) {
-                await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
+                pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
+                pharmacyThreadId = pharmacyResponse.thread_id ?? null;
+                if (pharmacyNoteId) {
+                    await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
+                }
             }
 
             return {
