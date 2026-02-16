@@ -219,28 +219,26 @@ WHERE d.delivery_id=:delivery_id`,
                     if (noteScope !== "order") {
                         ok = true; // pharmacy only accepts order-scoped note.created events
                     } else {
-                    const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
+                        const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
-                    // Optional filter: push only admin_note
-                    const onlyAdmin = (process.env.PHARMACY_ONLY_ADMIN_NOTES || "true") === "true";
-                    if (onlyAdmin && pharmacyPayload.note_type !== "admin_note") {
-                        ok = true; // treat as success (intentionally skipped)
-                    } else {
-                        console.log("postOrderNoteToPharmacy here");
-                        const pharmacyResp = await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
-                            body: pharmacyPayload.body,
-                            type: pharmacyPayload.type,
-                            author: pharmacyPayload.author
-                        });
+                        if (!pharmacyPayload.should_send_to_pharmacy) {
+                            ok = true; // intentionally skipped unless escalated clinical review + patient-authored note
+                        } else {
+                            console.log("postOrderNoteToPharmacy here");
+                            const pharmacyResp = await postOrderNoteToPharmacy(pharmacyPayload.order_number, {
+                                body: pharmacyPayload.body,
+                                type: pharmacyPayload.type,
+                                author: pharmacyPayload.author
+                            });
 
-                        const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
-                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
-                        if (pharmacyNoteId) {
-                            await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                            const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
+                            const pharmacyThreadId = pharmacyResp.thread_id ?? null;
+                            if (pharmacyNoteId) {
+                                await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                            }
+                            ok = true;
                         }
-                        ok = true;
                     }
-                }
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
@@ -395,7 +393,9 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     }
 
     const orderRows = await q<any>(
-        `SELECT pharmacy_order_ref FROM orders WHERE tenant_id=:tenant_id AND orderID=:orderID`,
+        `SELECT pharmacy_order_ref, escalate_clinical_review
+         FROM orders
+         WHERE tenant_id=:tenant_id AND orderID=:orderID`,
         { tenant_id, orderID }
     );
 
@@ -421,11 +421,15 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
 
     const n = noteRows[0];
 
+    const isEscalatedClinicalReview = Number(orderRows[0].escalate_clinical_review ?? 0) === 1;
+    const isPatientNote = String(n.created_by_role) === "patient";
+
     return {
         order_number: String(order_number),
         body: String(n.body),
         type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
         author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
-        note_type: n.note_type
+        note_type: n.note_type,
+        should_send_to_pharmacy: isEscalatedClinicalReview && isPatientNote
     };
 }
