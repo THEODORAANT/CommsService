@@ -99,6 +99,37 @@ type PharmacyOrderStatusResponse = {
     message?: string;
 };
 
+
+
+async function updateNoteExternalRefs(
+    tenant_id: string,
+    note_id: string,
+    external_note_ref: string,
+    external_thread_ref: string | null
+) {
+    try {
+        await q(
+            `UPDATE notes
+SET external_note_ref=:external_note_ref,
+    external_thread_ref=:external_thread_ref
+WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+            { tenant_id, note_id, external_note_ref, external_thread_ref }
+        );
+    } catch (err: any) {
+        const missingThreadColumn =
+            err?.code === "ER_BAD_FIELD_ERROR" &&
+            String(err?.sqlMessage ?? err?.message ?? "").includes("external_thread_ref");
+        if (!missingThreadColumn) throw err;
+
+        await q(
+            `UPDATE notes
+SET external_note_ref=:external_note_ref
+WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+            { tenant_id, note_id, external_note_ref }
+        );
+    }
+}
+
 const pharmacyNoteTypeMap: Record<string, string> = {
     admin_note: "ADMIN",
     clinical_note: "CLINICAL"
@@ -498,18 +529,7 @@ perchOrders.post(
             const pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
             const pharmacyThreadId = pharmacyResponse.thread_id ?? null;
             if (pharmacyNoteId) {
-                await q(
-                    `UPDATE notes
-           SET external_note_ref=:external_note_ref,
-               external_thread_ref=:external_thread_ref
-           WHERE tenant_id=:tenant_id AND note_id=:note_id`,
-                    {
-                        tenant_id,
-                        note_id,
-                        external_note_ref: pharmacyNoteId,
-                        external_thread_ref: pharmacyThreadId
-                    }
-                );
+                await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
             }
 
             return {

@@ -15,6 +15,35 @@ function parseMaybeJson<T>(value: T | string): T {
     return value;
 }
 
+async function updateNoteExternalRefs(
+    tenant_id: string,
+    note_id: string,
+    external_note_ref: string,
+    external_thread_ref: string | null
+) {
+    try {
+        await q(
+            `UPDATE notes
+SET external_note_ref=:external_note_ref,
+    external_thread_ref=:external_thread_ref
+WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+            { tenant_id, note_id, external_note_ref, external_thread_ref }
+        );
+    } catch (err: any) {
+        const missingThreadColumn =
+            err?.code === "ER_BAD_FIELD_ERROR" &&
+            String(err?.sqlMessage ?? err?.message ?? "").includes("external_thread_ref");
+        if (!missingThreadColumn) throw err;
+
+        await q(
+            `UPDATE notes
+SET external_note_ref=:external_note_ref
+WHERE tenant_id=:tenant_id AND note_id=:note_id`,
+            { tenant_id, note_id, external_note_ref }
+        );
+    }
+}
+
 export async function emitEvent(tenant_id: string, event_type: string, data: any) {
     const subs = await q<any>(
         `SELECT subscription_id, url, secret, event_types
@@ -207,18 +236,7 @@ WHERE d.delivery_id=:delivery_id`,
                         const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
                         const pharmacyThreadId = pharmacyResp.thread_id ?? null;
                         if (pharmacyNoteId) {
-                            await q(
-                                `UPDATE notes
-                   SET external_note_ref=:external_note_ref,
-                       external_thread_ref=:external_thread_ref
-                   WHERE tenant_id=:tenant_id AND note_id=:note_id`,
-                                {
-                                    tenant_id: d.tenant_id,
-                                    note_id: payloadObj?.data?.note_id,
-                                    external_note_ref: pharmacyNoteId,
-                                    external_thread_ref: pharmacyThreadId
-                                }
-                            );
+                            await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
                         }
                         ok = true;
                     }
