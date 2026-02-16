@@ -137,10 +137,16 @@ const pharmacyNoteTypeMap: Record<string, string> = {
 
 async function createPharmacyCustomerNote(payload: {
     email: string;
-    body: string;
-    type: string;
+    body?: string;
+    note?: string;
+    type?: string;
     author?: string | null;
 }): Promise<PharmacyOrderNoteResponse> {
+    const resolvedBody = payload.body ?? payload.note;
+    if (!resolvedBody) {
+        throw new Error("Pharmacy customer note requires either body or note.");
+    }
+
     const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/notes`, {
         method: "POST",
         headers: {
@@ -149,8 +155,8 @@ async function createPharmacyCustomerNote(payload: {
         },
         body: JSON.stringify({
             email: payload.email,
-            body: payload.body,
-            type: payload.type,
+            body: resolvedBody,
+            type: payload.type ?? "ADMIN",
             author: payload.author ?? undefined
         })
     });
