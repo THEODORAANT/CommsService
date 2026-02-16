@@ -162,6 +162,33 @@ async function createPharmacyCustomerNote(payload: {
     return (await resp.json()) as PharmacyOrderNoteResponse;
 }
 
+
+async function createPharmacyOrderNote(payload: {
+    orderNumber: string;
+    body: string;
+    type: string;
+    author?: string | null;
+}): Promise<PharmacyOrderNoteResponse> {
+    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/${payload.orderNumber}/notes`, {
+        method: "POST",
+        headers: {
+            "x-api-key": config.pharmacyApiKey,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            body: payload.body,
+            type: payload.type,
+            author: payload.author ?? undefined
+        })
+    });
+
+    if (!resp.ok) {
+        throw new Error(`Pharmacy API error: ${resp.status}`);
+    }
+
+    return (await resp.json()) as PharmacyOrderNoteResponse;
+}
+
 async function createPharmacyOrder(payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
     const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/orders/create`, {
         method: "POST",
@@ -473,7 +500,7 @@ perchOrders.post(
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
             const rows = await q<any>(
-                `SELECT o.memberID, o.escalate_clinical_review, m.email
+                `SELECT o.memberID, o.pharmacy_order_ref, o.escalate_clinical_review, m.email
                  FROM orders o
                  LEFT JOIN members m ON m.tenant_id=o.tenant_id AND m.memberID=o.memberID
                  WHERE o.tenant_id=:tenant_id AND o.orderID=:orderID`,
@@ -485,9 +512,10 @@ perchOrders.post(
                 throw err;
             }
             const memberID = Number(rows[0].memberID);
+            const pharmacyOrderRef = rows[0].pharmacy_order_ref as string | null;
             const memberEmail = rows[0].email as string | null;
             const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
-            const shouldSendToPharmacy = isEscalatedClinicalReview && body.created_by.role === "patient";
+            const shouldSendCustomerNote = isEscalatedClinicalReview && body.created_by.role === "patient";
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";
 
@@ -521,7 +549,8 @@ perchOrders.post(
 
             let pharmacyNoteId: string | null = null;
             let pharmacyThreadId: string | null = null;
-            if (shouldSendToPharmacy) {
+            const noteAuthor = body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role;
+            if (shouldSendCustomerNote) {
                 if (!memberEmail) {
                     const err: any = new Error("Member email is required to create a customer note in pharmacy.");
                     err.status = 422;
@@ -532,14 +561,31 @@ perchOrders.post(
                     email: memberEmail,
                     body: body.body,
                     type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
-                    author: body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role
+                    author: noteAuthor
                 });
 
                 pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
                 pharmacyThreadId = pharmacyResponse.thread_id ?? null;
-                if (pharmacyNoteId) {
-                    await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
+            } else {
+                if (!pharmacyOrderRef) {
+                    const err: any = new Error("Order is missing pharmacy_order_ref. Link the order with pharmacy_order_ref first.");
+                    err.status = 422;
+                    throw err;
                 }
+
+                const pharmacyResponse = await createPharmacyOrderNote({
+                    orderNumber: pharmacyOrderRef,
+                    body: body.body,
+                    type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
+                    author: noteAuthor
+                });
+
+                pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
+                pharmacyThreadId = pharmacyResponse.thread_id ?? null;
+            }
+
+            if (pharmacyNoteId) {
+                await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
             }
 
             return {
