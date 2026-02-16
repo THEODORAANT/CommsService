@@ -44,6 +44,13 @@ WHERE tenant_id=:tenant_id AND note_id=:note_id`,
     }
 }
 
+function getPharmacyNoteId(pharmacyResponse: {
+    pharmacy_note_id?: string;
+    note?: { _id?: string };
+}): string | null {
+    return pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
+}
+
 export async function emitEvent(tenant_id: string, event_type: string, data: any) {
     const subs = await q<any>(
         `SELECT subscription_id, url, secret, event_types
@@ -125,9 +132,17 @@ async function postCustomerNoteToPharmacy(payload: {
     }
 
     return await resp.json() as {
+        success?: boolean;
+        message?: string;
         pharmacy_note_id?: string;
         thread_id?: string;
-        note?: { _id?: string };
+        note?: {
+            _id?: string;
+            content?: string;
+            type?: string;
+            author?: string;
+            createdAt?: string;
+        };
     };
 }
 
@@ -151,9 +166,17 @@ async function postOrderNoteToPharmacy(orderNumber: string, payload: {
     }
 
     return await resp.json() as {
+        success?: boolean;
+        message?: string;
         pharmacy_note_id?: string;
         thread_id?: string;
-        note?: { _id?: string };
+        note?: {
+            _id?: string;
+            content?: string;
+            type?: string;
+            author?: string;
+            createdAt?: string;
+        };
     };
 }
 
@@ -257,7 +280,7 @@ WHERE d.delivery_id=:delivery_id`,
                                   author: pharmacyPayload.author
                               });
 
-                        const pharmacyNoteId = pharmacyResp.pharmacy_note_id ?? pharmacyResp.note?._id ?? null;
+                        const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
                         const pharmacyThreadId = pharmacyResp.thread_id ?? null;
                         if (pharmacyNoteId) {
                             await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
