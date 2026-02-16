@@ -1,6 +1,7 @@
 import { Router } from "express";
 import crypto from "crypto";
 import { config } from "../config.js";
+import { sendPharmacyRequest } from "../pharmacy.client.js";
 import { q } from "../db.js";
 
 export const customerMediaRoutes = Router();
@@ -141,7 +142,7 @@ customerMediaRoutes.post("/api/customers/media", async (req, res, next) => {
             return res.status(404).json({ success: false, message: "Customer not found" });
         }
 
-        let pharmacyResp: Response;
+        let pharmacyResp: { status: number; ok: boolean; bodyJson: any | null };
         if (uploadedFile) {
             const form = new FormData();
             form.append("email", email);
@@ -151,25 +152,32 @@ customerMediaRoutes.post("/api/customers/media", async (req, res, next) => {
                 uploadedFile.filename
             );
 
-            pharmacyResp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/media`, {
+            pharmacyResp = await sendPharmacyRequest({
+                tenant_id: config.tenantDefault,
+                operation: "upload_customer_media_file",
                 method: "POST",
-                headers: {
-                    "x-api-key": config.pharmacyApiKey
-                },
-                body: form
+                path: "/api/customers/media",
+                body: form,
+                requestBodyForLog: {
+                    email,
+                    file_name: uploadedFile.filename,
+                    content_type: uploadedFile.contentType,
+                    size: uploadedFile.buffer.length
+                }
             });
         } else {
-            pharmacyResp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers/media`, {
+            pharmacyResp = await sendPharmacyRequest({
+                tenant_id: config.tenantDefault,
+                operation: "upload_customer_media_url",
                 method: "POST",
-                headers: {
-                    "x-api-key": config.pharmacyApiKey,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ email, url })
+                path: "/api/customers/media",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, url }),
+                requestBodyForLog: { email, url }
             });
         }
 
-        const pharmacyBody = await pharmacyResp.json().catch(() => ({} as any));
+        const pharmacyBody = pharmacyResp.bodyJson ?? {};
 
         if (pharmacyResp.status === 404) {
             return res.status(404).json({ success: false, message: "Customer not found" });

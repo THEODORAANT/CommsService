@@ -7,6 +7,7 @@ import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
 import { config } from "../config.js";
+import { sendPharmacyRequest } from "../pharmacy.client.js";
 
 export const perchMembers = Router();
 
@@ -68,7 +69,7 @@ type PharmacyCustomerLookupResponse = {
     data?: Record<string, unknown>;
 };
 
-async function createPharmacyCustomer(payload: {
+async function createPharmacyCustomer(tenant_id: string, payload: {
     name: string;
     email: string;
     dob: string;
@@ -79,21 +80,21 @@ async function createPharmacyCustomer(payload: {
     postCode: string;
     country: string;
 }): Promise<string> {
-    const resp = await fetch(`${config.pharmacyApiBaseUrl}/api/customers`, {
+    const resp = await sendPharmacyRequest<PharmacyCustomerResponse>({
+        tenant_id,
+        operation: "create_customer",
         method: "POST",
-        headers: {
-            "x-api-key": config.pharmacyApiKey,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        path: "/api/customers",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        requestBodyForLog: payload
     });
-console.log("pst");console.log(resp);
 
     if (!resp.ok) {
         throw new Error(`Pharmacy API error: ${resp.status}`);
     }
 
-    const data = (await resp.json()) as PharmacyCustomerResponse;
+    const data = (resp.bodyJson ?? {}) as PharmacyCustomerResponse;
     const customerId = data?.data?.customerId;
     if (!customerId) {
         throw new Error("Pharmacy API missing customerId");
@@ -102,16 +103,13 @@ console.log("pst");console.log(resp);
     return customerId;
 }
 
-async function getPharmacyCustomerByEmail(email: string): Promise<PharmacyCustomerLookupResponse> {
-    const resp = await fetch(
-        `${config.pharmacyApiBaseUrl}/api/customers/${encodeURIComponent(email)}`,
-        {
-            method: "GET",
-            headers: {
-                "x-api-key": config.pharmacyApiKey
-            }
-        }
-    );
+async function getPharmacyCustomerByEmail(tenant_id: string, email: string): Promise<PharmacyCustomerLookupResponse> {
+    const resp = await sendPharmacyRequest<PharmacyCustomerLookupResponse>({
+        tenant_id,
+        operation: "get_customer_by_email",
+        method: "GET",
+        path: `/api/customers/${encodeURIComponent(email)}`
+    });
 
     if (!resp.ok) {
         const err: any = new Error(`Pharmacy API error: ${resp.status}`);
@@ -119,14 +117,14 @@ async function getPharmacyCustomerByEmail(email: string): Promise<PharmacyCustom
         throw err;
     }
 
-    return (await resp.json()) as PharmacyCustomerLookupResponse;
+    return (resp.bodyJson ?? {}) as PharmacyCustomerLookupResponse;
 }
 
 perchMembers.get(
     "/v1/perch/customers/:email",
     authedHandler(async (req, res) => {
         const email = z.string().email().parse(req.params.email);
-        const customer = await getPharmacyCustomerByEmail(email);
+        const customer = await getPharmacyCustomerByEmail(req.tenant_id, email);
         res.json(customer);
     })
 );
@@ -134,12 +132,8 @@ perchMembers.get(
 perchMembers.post(
     "/v1/perch/members/:memberID/link",
     authedHandler(async (req, res) => {
-        //console.log("Incoming body:", req.body);
-
         const tenant_id = req.tenant_id;
-        console.log("tenant_id :", tenant_id);
         const memberID = Number(req.params.memberID);
-        console.log("memberID :", memberID);
         const body = MemberLinkSchema.parse(req.body);
         const email = body.email ?? body.memberEmail ?? null;
         const fullName = body.name ?? [body.first_name, body.last_name].filter(Boolean).join(" ").trim();
@@ -159,7 +153,7 @@ perchMembers.post(
             return;
         }
 
-        const pharmacyCustomerId = await createPharmacyCustomer({
+        const pharmacyCustomerId = await createPharmacyCustomer(tenant_id, {
             name: fullName,
             email,
             dob: body.dob,
