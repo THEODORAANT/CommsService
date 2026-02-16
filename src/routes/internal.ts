@@ -6,14 +6,25 @@ import { processWebhookBatch } from "../webhooks/webhooks.service.js";
 
 export const internalRoutes = Router();
 
-internalRoutes.post("/v1/internal/process-webhooks", async (req, res) => {
-    const key = req.header("X-Worker-Key");
-    if (!key || key !== config.workerKey) return res.status(403).json({ error: "forbidden" });
-
-    const limit = Number(req.query.limit || 50);
-    const result = await processWebhookBatch(limit);
-    res.json(result);
+const processWebhooksQuerySchema = z.object({
+    limit: z.coerce.number().int().min(1).max(500).optional()
 });
+
+const processWebhooksHandler = async (req: any, res: any, next: any) => {
+    try {
+        const key = req.header("X-Worker-Key");
+        if (!key || key !== config.workerKey) return res.status(403).json({ error: "forbidden" });
+
+        const { limit } = processWebhooksQuerySchema.parse(req.query);
+        const result = await processWebhookBatch(limit ?? 50);
+        return res.json(result);
+    } catch (err) {
+        return next(err);
+    }
+};
+
+internalRoutes.post("/v1/internal/process-webhooks", processWebhooksHandler);
+internalRoutes.get("/v1/internal/process-webhooks", processWebhooksHandler);
 
 const updateOrderStatusPathSchema = z.object({
     orderNumber: z.string().regex(/^ORD-\d{4}-\d{5}$/)
