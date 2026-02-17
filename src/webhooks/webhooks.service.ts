@@ -278,6 +278,11 @@ WHERE d.delivery_id=:delivery_id`,
                     } else {
                         const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
 
+                        if (pharmacyPayload.external_note_ref) {
+                            ok = true;
+                            continue;
+                        }
+
                         if (!pharmacyPayload.should_forward_to_pharmacy) {
                             ok = true;
                             continue;
@@ -305,6 +310,11 @@ WHERE d.delivery_id=:delivery_id`,
                     }
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
+
+                    if (pharmacyReplyPayload.external_reply_ref) {
+                        ok = true;
+                        continue;
+                    }
 
                     const pharmacyReplyResp = await postNoteReplyToPharmacy(d.tenant_id, pharmacyReplyPayload.pharmacy_note_id, {
                         body: pharmacyReplyPayload.body,
@@ -474,7 +484,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     }
 
     const noteRows = await q<any>(
-        `SELECT n.note_type, n.body, n.created_by_role, n.created_by_user_id, n.created_by_display_name, m.email
+        `SELECT n.note_type, n.body, n.created_by_role, n.created_by_user_id, n.created_by_display_name, n.external_note_ref, m.email
      FROM notes n
      LEFT JOIN members m ON m.tenant_id=n.tenant_id AND m.memberID=n.memberID
      WHERE n.tenant_id=:tenant_id AND n.note_id=:note_id`,
@@ -499,6 +509,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
             order_number: null,
             email: null,
             body: String(n.body),
+            external_note_ref: n.external_note_ref ? String(n.external_note_ref) : null,
             type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
             author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
             note_type: n.note_type,
@@ -526,6 +537,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
         order_number: String(orderNumber),
         email: n.email ? String(n.email) : null,
         body: String(n.body),
+        external_note_ref: n.external_note_ref ? String(n.external_note_ref) : null,
         type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
         author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
         note_type: n.note_type,
