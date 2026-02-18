@@ -17,6 +17,23 @@ function parseMaybeJson<T>(value: T | string): T {
     return value;
 }
 
+function resolvePharmacyNoteScope(data: any): "patient" | "order" | null {
+    const explicitScope = typeof data?.scope === "string" ? data.scope.toLowerCase() : "";
+    if (explicitScope === "patient" || explicitScope === "order") {
+        return explicitScope;
+    }
+
+    const targetType = typeof data?.target_type === "string" ? data.target_type.toLowerCase() : "";
+    if (targetType === "patient_note") {
+        return "patient";
+    }
+    if (targetType === "order_note") {
+        return "order";
+    }
+
+    return null;
+}
+
 async function updateNoteExternalRefs(
     tenant_id: string,
     note_id: string,
@@ -286,7 +303,7 @@ WHERE d.delivery_id=:delivery_id`,
         try {
             if (d.subscriber_system === "pharmacy") {
                 if (payloadObj?.event_type === "note.created") {
-                    const noteScope = payloadObj?.data?.scope;
+                    const noteScope = resolvePharmacyNoteScope(payloadObj?.data);
                     const pharmacyPayload = noteScope === "patient"
                         ? await buildPharmacyPatientNotePayload(d.tenant_id, payloadObj)
                         : noteScope === "order"
@@ -464,7 +481,7 @@ async function buildPharmacyPatientNotePayload(tenant_id: string, payloadObj: an
 
     const note_id = payloadObj?.data?.note_id;
     const memberID = payloadObj?.data?.memberID;
-    const scope = payloadObj?.data?.scope;
+    const scope = resolvePharmacyNoteScope(payloadObj?.data);
 
     if (!note_id || !memberID || scope !== "patient") {
         const err: any = new Error("Pharmacy requires patient-scoped note.created events with memberID");
@@ -517,7 +534,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     const note_id = payloadObj?.data?.note_id;
     const memberID = payloadObj?.data?.memberID;
     const orderID = payloadObj?.data?.orderID ?? null;
-    const scope = payloadObj?.data?.scope;
+    const scope = resolvePharmacyNoteScope(payloadObj?.data);
 
     if (!note_id || !memberID || !orderID || scope !== "order") {
         const err: any = new Error("Pharmacy requires order-scoped note.created events with orderID");
