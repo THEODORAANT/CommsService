@@ -293,67 +293,55 @@ WHERE d.delivery_id=:delivery_id`,
                             ? await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj)
                             : null;
 
-                    if (!pharmacyPayload) {
+                    if (!pharmacyPayload || pharmacyPayload.external_note_ref || !pharmacyPayload.should_forward_to_pharmacy) {
                         ok = true;
-                        continue;
-                    }
+                    } else {
+                        const pharmacyResp = pharmacyPayload.should_send_customer_note
+                            ? await postCustomerNoteToPharmacy(d.tenant_id, {
+                                  email: String(pharmacyPayload.email),
+                                  body: pharmacyPayload.body,
+                                  type: pharmacyPayload.type,
+                                  author: pharmacyPayload.author
+                              })
+                            : await postOrderNoteToPharmacy(d.tenant_id, String(pharmacyPayload.order_number), {
+                                  body: pharmacyPayload.body,
+                                  type: pharmacyPayload.type,
+                                  author: pharmacyPayload.author
+                              });
 
-                    if (pharmacyPayload.external_note_ref) {
+                        const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
+                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
+                        if (pharmacyNoteId) {
+                            await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                        }
                         ok = true;
-                        continue;
                     }
-
-                    if (!pharmacyPayload.should_forward_to_pharmacy) {
-                        ok = true;
-                        continue;
-                    }
-
-                    const pharmacyResp = pharmacyPayload.should_send_customer_note
-                        ? await postCustomerNoteToPharmacy(d.tenant_id, {
-                              email: String(pharmacyPayload.email),
-                              body: pharmacyPayload.body,
-                              type: pharmacyPayload.type,
-                              author: pharmacyPayload.author
-                          })
-                        : await postOrderNoteToPharmacy(d.tenant_id, String(pharmacyPayload.order_number), {
-                              body: pharmacyPayload.body,
-                              type: pharmacyPayload.type,
-                              author: pharmacyPayload.author
-                          });
-
-                    const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
-                    const pharmacyThreadId = pharmacyResp.thread_id ?? null;
-                    if (pharmacyNoteId) {
-                        await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
-                    }
-                    ok = true;
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
                     if (pharmacyReplyPayload.external_reply_ref) {
                         ok = true;
-                        continue;
-                    }
+                    } else {
+                        const pharmacyReplyResp = await postNoteReplyToPharmacy(d.tenant_id, pharmacyReplyPayload.pharmacy_note_id, {
+                            body: pharmacyReplyPayload.body,
+                            created_by: pharmacyReplyPayload.created_by
+                        });
 
-                    const pharmacyReplyResp = await postNoteReplyToPharmacy(d.tenant_id, pharmacyReplyPayload.pharmacy_note_id, {
-                        body: pharmacyReplyPayload.body,
-                        created_by: pharmacyReplyPayload.created_by
-                    });
-
-                    if (pharmacyReplyResp.note_reply_id && !pharmacyReplyPayload.external_reply_ref) {
-                        await q(
-                            `UPDATE note_replies
+                        if (pharmacyReplyResp.note_reply_id && !pharmacyReplyPayload.external_reply_ref) {
+                            await q(
+                                `UPDATE note_replies
                SET external_reply_ref=:external_reply_ref
                WHERE tenant_id=:tenant_id AND note_reply_id=:note_reply_id`,
-                            {
-                                tenant_id: d.tenant_id,
-                                note_reply_id: pharmacyReplyPayload.note_reply_id,
-                                external_reply_ref: pharmacyReplyResp.note_reply_id
-                            }
-                        );
-                    }
+                                {
+                                    tenant_id: d.tenant_id,
+                                    note_reply_id: pharmacyReplyPayload.note_reply_id,
+                                    external_reply_ref: pharmacyReplyResp.note_reply_id
+                                }
+                            );
+                        }
 
-                    ok = true;
+                        ok = true;
+                    }
                 } else {
                     ok = true;
                 }
