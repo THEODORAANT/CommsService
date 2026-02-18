@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { ordersHasEscalateClinicalReviewColumn, q } from "../db.js";
 import { config } from "../config.js";
 import { sendPharmacyRequest } from "../pharmacy.client.js";
+import { normalizeForwardedNoteBody } from "../utils/note-body.js";
 
 export function signWebhook(secret: string, rawBody: string): string {
     return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
@@ -104,7 +105,9 @@ export function computeNextAttempt(attempt: number): number {
 
 const pharmacyNoteTypeMap: Record<string, string> = {
     admin_note: "ADMIN",
-    clinical_note: "CLINICAL"
+    clinical_note: "CLINICAL",
+    complaint_note: "COMPLAINT",
+    complaint: "COMPLAINT"
 };
 
 const pharmacyActorRoleMap: Record<string, string> = {
@@ -121,7 +124,7 @@ async function postCustomerNoteToPharmacy(tenant_id: string, payload: {
     type?: string;
     author?: string;
 }) {
-    const resolvedBody = payload.body ?? payload.note;
+    const resolvedBody = normalizeForwardedNoteBody(payload.body ?? payload.note ?? "");
     if (!resolvedBody) {
         throw new Error("Pharmacy customer note requires either body or note.");
     }
@@ -166,14 +169,20 @@ async function postOrderNoteToPharmacy(tenant_id: string, orderNumber: string, p
     type: string;
     author?: string;
 }) {
+    const requestPayload = {
+        body: normalizeForwardedNoteBody(payload.body),
+        type: payload.type,
+        author: payload.author
+    };
+
     const resp = await sendPharmacyRequest({
         tenant_id,
         operation: "webhook_create_order_note",
         method: "POST",
         path: `/api/orders/${orderNumber}/notes`,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        requestBodyForLog: payload
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
@@ -203,14 +212,19 @@ async function postNoteReplyToPharmacy(tenant_id: string, noteId: string, payloa
         display_name?: string;
     };
 }) {
+    const requestPayload = {
+        body: normalizeForwardedNoteBody(payload.body),
+        created_by: payload.created_by
+    };
+
     const resp = await sendPharmacyRequest({
         tenant_id,
         operation: "webhook_create_note_reply",
         method: "POST",
         path: `/api/notes/${noteId}/replies`,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        requestBodyForLog: payload
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
@@ -273,41 +287,46 @@ WHERE d.delivery_id=:delivery_id`,
             if (d.subscriber_system === "pharmacy") {
                 if (payloadObj?.event_type === "note.created") {
                     const noteScope = payloadObj?.data?.scope;
-                    if (noteScope !== "order") {
-                        ok = true; // pharmacy only accepts order-scoped note.created events
-                    } else {
-                        const pharmacyPayload = await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj);
+                    const pharmacyPayload = noteScope === "patient"
+                        ? await buildPharmacyPatientNotePayload(d.tenant_id, payloadObj)
+                        : noteScope === "order"
+                            ? await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj)
+                            : null;
 
-                        if (pharmacyPayload.external_note_ref) {
-                            ok = true;
-                            continue;
-                        }
-
-                        if (!pharmacyPayload.should_forward_to_pharmacy) {
-                            ok = true;
-                            continue;
-                        }
-
-                        const pharmacyResp = pharmacyPayload.should_send_customer_note
-                            ? await postCustomerNoteToPharmacy(d.tenant_id, {
-                                  email: String(pharmacyPayload.email),
-                                  body: pharmacyPayload.body,
-                                  type: pharmacyPayload.type,
-                                  author: pharmacyPayload.author
-                              })
-                            : await postOrderNoteToPharmacy(d.tenant_id, String(pharmacyPayload.order_number), {
-                                  body: pharmacyPayload.body,
-                                  type: pharmacyPayload.type,
-                                  author: pharmacyPayload.author
-                              });
-
-                        const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
-                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
-                        if (pharmacyNoteId) {
-                            await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
-                        }
+                    if (!pharmacyPayload) {
                         ok = true;
+                        continue;
                     }
+
+                    if (pharmacyPayload.external_note_ref) {
+                        ok = true;
+                        continue;
+                    }
+
+                    if (!pharmacyPayload.should_forward_to_pharmacy) {
+                        ok = true;
+                        continue;
+                    }
+
+                    const pharmacyResp = pharmacyPayload.should_send_customer_note
+                        ? await postCustomerNoteToPharmacy(d.tenant_id, {
+                              email: String(pharmacyPayload.email),
+                              body: pharmacyPayload.body,
+                              type: pharmacyPayload.type,
+                              author: pharmacyPayload.author
+                          })
+                        : await postOrderNoteToPharmacy(d.tenant_id, String(pharmacyPayload.order_number), {
+                              body: pharmacyPayload.body,
+                              type: pharmacyPayload.type,
+                              author: pharmacyPayload.author
+                          });
+
+                    const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
+                    const pharmacyThreadId = pharmacyResp.thread_id ?? null;
+                    if (pharmacyNoteId) {
+                        await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
+                    }
+                    ok = true;
                 } else if (payloadObj?.event_type === "note.reply.created") {
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
@@ -448,6 +467,58 @@ async function buildPharmacyNoteReplyPayload(tenant_id: string, payloadObj: any)
         external_reply_ref: r.external_reply_ref as string | null
     };
 }
+async function buildPharmacyPatientNotePayload(tenant_id: string, payloadObj: any) {
+    if (payloadObj.event_type !== "note.created") {
+        const err: any = new Error("Unsupported pharmacy event type");
+        err.status = 400;
+        throw err;
+    }
+
+    const note_id = payloadObj?.data?.note_id;
+    const memberID = payloadObj?.data?.memberID;
+    const scope = payloadObj?.data?.scope;
+
+    if (!note_id || !memberID || scope !== "patient") {
+        const err: any = new Error("Pharmacy requires patient-scoped note.created events with memberID");
+        err.status = 400;
+        throw err;
+    }
+
+    const noteRows = await q<any>(
+        `SELECT n.note_type, n.body, n.created_by_role, n.created_by_user_id, n.created_by_display_name, n.external_note_ref, m.email
+     FROM notes n
+     LEFT JOIN members m ON m.tenant_id=n.tenant_id AND m.memberID=n.memberID
+     WHERE n.tenant_id=:tenant_id AND n.note_id=:note_id`,
+        { tenant_id, note_id }
+    );
+
+    if (!noteRows.length) {
+        const err: any = new Error("Note not found for note_id");
+        err.status = 404;
+        throw err;
+    }
+
+    const n = noteRows[0];
+
+    if (!n.email) {
+        const err: any = new Error("Member email is required to create customer note in pharmacy.");
+        err.status = 422;
+        throw err;
+    }
+
+    return {
+        order_number: null,
+        email: String(n.email),
+        body: String(n.body),
+        external_note_ref: n.external_note_ref ? String(n.external_note_ref) : null,
+        type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
+        author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
+        note_type: n.note_type,
+        should_send_customer_note: true,
+        should_forward_to_pharmacy: true
+    };
+}
+
 async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any) {
     if (payloadObj.event_type !== "note.created") {
         const err: any = new Error("Unsupported pharmacy event type");
