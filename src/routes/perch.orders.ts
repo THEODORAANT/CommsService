@@ -8,6 +8,7 @@ import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
 import { config } from "../config.js";
 import { sendPharmacyRequest } from "../pharmacy.client.js";
+import { normalizeForwardedNoteBody } from "../utils/note-body.js";
 
 export const perchOrders = Router();
 
@@ -133,7 +134,9 @@ WHERE tenant_id=:tenant_id AND note_id=:note_id`,
 
 const pharmacyNoteTypeMap: Record<string, string> = {
     admin_note: "ADMIN",
-    clinical_note: "CLINICAL"
+    clinical_note: "CLINICAL",
+    complaint_note: "COMPLAINT",
+    complaint: "COMPLAINT"
 };
 
 async function createPharmacyCustomerNote(tenant_id: string, payload: {
@@ -143,7 +146,7 @@ async function createPharmacyCustomerNote(tenant_id: string, payload: {
     type?: string;
     author?: string | null;
 }): Promise<PharmacyOrderNoteResponse> {
-    const resolvedBody = payload.body ?? payload.note;
+    const resolvedBody = normalizeForwardedNoteBody(payload.body ?? payload.note ?? "");
     if (!resolvedBody) {
         throw new Error("Pharmacy customer note requires either body or note.");
     }
@@ -179,7 +182,7 @@ async function createPharmacyOrderNote(tenant_id: string, payload: {
     author?: string | null;
 }): Promise<PharmacyOrderNoteResponse> {
     const requestPayload = {
-        body: payload.body,
+        body: normalizeForwardedNoteBody(payload.body),
         type: payload.type,
         author: payload.author ?? undefined
     };
