@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { ordersHasEscalateClinicalReviewColumn, q } from "../db.js";
 import { config } from "../config.js";
 import { sendPharmacyRequest } from "../pharmacy.client.js";
+import { normalizeForwardedNoteBody } from "../utils/note-body.js";
 
 export function signWebhook(secret: string, rawBody: string): string {
     return crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
@@ -104,7 +105,9 @@ export function computeNextAttempt(attempt: number): number {
 
 const pharmacyNoteTypeMap: Record<string, string> = {
     admin_note: "ADMIN",
-    clinical_note: "CLINICAL"
+    clinical_note: "CLINICAL",
+    complaint_note: "COMPLAINT",
+    complaint: "COMPLAINT"
 };
 
 const pharmacyActorRoleMap: Record<string, string> = {
@@ -121,7 +124,7 @@ async function postCustomerNoteToPharmacy(tenant_id: string, payload: {
     type?: string;
     author?: string;
 }) {
-    const resolvedBody = payload.body ?? payload.note;
+    const resolvedBody = normalizeForwardedNoteBody(payload.body ?? payload.note ?? "");
     if (!resolvedBody) {
         throw new Error("Pharmacy customer note requires either body or note.");
     }
@@ -166,14 +169,20 @@ async function postOrderNoteToPharmacy(tenant_id: string, orderNumber: string, p
     type: string;
     author?: string;
 }) {
+    const requestPayload = {
+        body: normalizeForwardedNoteBody(payload.body),
+        type: payload.type,
+        author: payload.author
+    };
+
     const resp = await sendPharmacyRequest({
         tenant_id,
         operation: "webhook_create_order_note",
         method: "POST",
         path: `/api/orders/${orderNumber}/notes`,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        requestBodyForLog: payload
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
@@ -203,14 +212,19 @@ async function postNoteReplyToPharmacy(tenant_id: string, noteId: string, payloa
         display_name?: string;
     };
 }) {
+    const requestPayload = {
+        body: normalizeForwardedNoteBody(payload.body),
+        created_by: payload.created_by
+    };
+
     const resp = await sendPharmacyRequest({
         tenant_id,
         operation: "webhook_create_note_reply",
         method: "POST",
         path: `/api/notes/${noteId}/replies`,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        requestBodyForLog: payload
+        body: JSON.stringify(requestPayload),
+        requestBodyForLog: requestPayload
     });
 
     if (!resp.ok) {
