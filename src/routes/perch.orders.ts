@@ -534,8 +534,7 @@ perchOrders.post(
             const memberEmail = rows[0].email as string | null;
             const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
             const isPatientNote = body.created_by.role === "patient";
-            const isOrderTypeRelated = body.note_type === "admin_note" || body.note_type === "clinical_note";
-            const shouldForwardToPharmacy = isOrderTypeRelated || (isPatientNote && isEscalatedClinicalReview);
+            const shouldForwardToPharmacy = isEscalatedClinicalReview || body.note_type === "admin_note" || body.note_type === "clinical_note";
             const shouldSendCustomerNote = isPatientNote && isEscalatedClinicalReview;
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";

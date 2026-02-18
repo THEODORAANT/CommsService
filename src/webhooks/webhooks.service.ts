@@ -502,7 +502,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     const isEscalatedClinicalReview = Number(orderRows[0].escalate_clinical_review ?? 0) === 1;
     const isPatientNote = String(n.created_by_role) === "patient";
     const isOrderTypeRelated = String(n.note_type) === "admin_note" || String(n.note_type) === "clinical_note";
-    const shouldForwardToPharmacy = isOrderTypeRelated || (isPatientNote && isEscalatedClinicalReview);
+    const shouldForwardToPharmacy = isEscalatedClinicalReview || isOrderTypeRelated;
 
     if (!shouldForwardToPharmacy) {
         return {
