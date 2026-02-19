@@ -299,11 +299,13 @@ WHERE d.delivery_id=:delivery_id`,
 
         let ok = false;
         let errText: string | null = null;
+        let failureStage: string | null = null;
 
         try {
             if (d.subscriber_system === "pharmacy") {
                 if (payloadObj?.event_type === "note.created") {
                     const noteScope = resolvePharmacyNoteScope(payloadObj?.data);
+                    failureStage = "build_pharmacy_note_payload";
                     const pharmacyPayload = noteScope === "patient"
                         ? await buildPharmacyPatientNotePayload(d.tenant_id, payloadObj)
                         : noteScope === "order"
@@ -314,6 +316,9 @@ WHERE d.delivery_id=:delivery_id`,
                        ok = true;
 
                     } else {
+                        failureStage = pharmacyPayload.should_send_customer_note
+                            ? "create_pharmacy_customer_note"
+                            : "create_pharmacy_order_note";
                         const pharmacyResp = pharmacyPayload.should_send_customer_note
                             ? await postCustomerNoteToPharmacy(d.tenant_id, {
                                   email: String(pharmacyPayload.email),
@@ -327,6 +332,7 @@ WHERE d.delivery_id=:delivery_id`,
                                   author: pharmacyPayload.author
                               });
 
+                        failureStage = "update_note_external_refs";
                         const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
                         const pharmacyThreadId = pharmacyResp.thread_id ?? null;
                         if (pharmacyNoteId) {
@@ -335,17 +341,20 @@ WHERE d.delivery_id=:delivery_id`,
                         ok = true;
                     }
                 } else if (payloadObj?.event_type === "note.reply.created") {
+                    failureStage = "build_pharmacy_note_reply_payload";
                     const pharmacyReplyPayload = await buildPharmacyNoteReplyPayload(d.tenant_id, payloadObj);
 
                     if (pharmacyReplyPayload.external_reply_ref) {
                         ok = true;
                     } else {
+                        failureStage = "create_pharmacy_note_reply";
                         const pharmacyReplyResp = await postNoteReplyToPharmacy(d.tenant_id, pharmacyReplyPayload.pharmacy_note_id, {
                             body: pharmacyReplyPayload.body,
                             created_by: pharmacyReplyPayload.created_by
                         });
 
                         if (pharmacyReplyResp.note_reply_id && !pharmacyReplyPayload.external_reply_ref) {
+                            failureStage = "update_note_reply_external_ref";
                             await q(
                                 `UPDATE note_replies
                SET external_reply_ref=:external_reply_ref
@@ -380,7 +389,8 @@ WHERE d.delivery_id=:delivery_id`,
             }
         } catch (e: any) {
             ok = false;
-            errText = e?.message || "network error";
+            const baseError = e?.message || "network error";
+            errText = failureStage ? `[${failureStage}] ${baseError}` : baseError;
         }
 
         const nextAttemptSeconds = computeNextAttempt(Number(d.attempt_count) + 1);
