@@ -95,9 +95,9 @@ async function createPharmacyCustomer(tenant_id: string, payload: {
     dob: string;
     phone: string;
     gender: string;
-    addressLine1: string;
-    city: string;
-    postCode: string;
+    addressLine1?: string;
+    city?: string;
+    postCode?: string;
     country: string;
 }): Promise<string> {
     const resp = await sendPharmacyRequest<PharmacyCustomerResponse>({
@@ -215,9 +215,6 @@ perchMembers.post(
             !body.dob ||
             !body.phone ||
             !body.gender ||
-            !body.addressLine1 ||
-            !body.city ||
-            !body.postCode ||
             !body.country
         ) {
             res.status(400).json({ ok: false, message: "Missing required pharmacy customer fields." });
@@ -230,9 +227,9 @@ perchMembers.post(
             dob: body.dob,
             phone: body.phone,
             gender: body.gender,
-            addressLine1: body.addressLine1,
-            city: body.city,
-            postCode: body.postCode,
+            addressLine1: body.addressLine1 ?? undefined,
+            city: body.city ?? undefined,
+            postCode: body.postCode ?? undefined,
             country: body.country
         });
 
