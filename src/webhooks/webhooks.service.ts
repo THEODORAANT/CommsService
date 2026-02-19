@@ -310,8 +310,9 @@ WHERE d.delivery_id=:delivery_id`,
                             ? await buildPharmacyOrderNotePayload(d.tenant_id, payloadObj)
                             : null;
 
-                    if (!pharmacyPayload || pharmacyPayload.external_note_ref || !pharmacyPayload.should_forward_to_pharmacy) {
-                        ok = true;
+                    if (!pharmacyPayload  || !pharmacyPayload.should_forward_to_pharmacy) {
+                       ok = true;
+
                     } else {
                         const pharmacyResp = pharmacyPayload.should_send_customer_note
                             ? await postCustomerNoteToPharmacy(d.tenant_id, {
