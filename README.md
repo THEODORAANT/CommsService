@@ -5,9 +5,11 @@ Perch-native Notes + Threaded Replies + 3-way Chat keyed by memberID and orderID
 ## Setup
 1) Run `src/sql/001_init_mysql.sql` on MySQL 8
 
-2) Create `.env` (you can copy from `comms-service-mysql/.env.example`) and fill values.
+2) If your database already exists, run incremental scripts (currently `src/sql/002_add_complaint_note_type.sql`).
 
-3) Install + run:
+3) Create `.env` (you can copy from `comms-service-mysql/.env.example`) and fill values.
+
+4) Install + run:
    npm i
    npm run build
    npm run start

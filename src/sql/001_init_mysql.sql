@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS notes (
   scope ENUM('patient','order') NOT NULL,
   memberID BIGINT NOT NULL,
   orderID BIGINT NULL,
-  note_type ENUM('admin_note','clinical_note') NOT NULL,
+  note_type ENUM('admin_note','clinical_note','complaint_note') NOT NULL,
   title VARCHAR(255) NULL,
   body TEXT NOT NULL,
   status ENUM('open','resolved','archived') NOT NULL DEFAULT 'open',
