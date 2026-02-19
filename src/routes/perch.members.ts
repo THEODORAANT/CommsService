@@ -23,7 +23,7 @@ const ActorSchema = z.object({
 });
 
 const LegacyNoteCreateSchema = z.object({
-    note_type: z.enum(["admin_note", "clinical_note"]),
+    note_type: z.enum(["admin_note", "clinical_note", "complaint_note"]),
     title: z.string().optional().nullable(),
     body: z.string().min(1),
     status: z.enum(["open", "resolved", "archived"]).optional(),
@@ -53,8 +53,14 @@ function normalizeMemberNoteInput(input: z.infer<typeof NoteCreateSchema>) {
     const resolvedBody = (input.body?.trim() || input.note?.trim() || "").trim();
     const normalizedType = input.type ?? "ADMIN";
 
+    const noteTypeMap = {
+        ADMIN: "admin_note",
+        CLINICAL: "clinical_note",
+        COMPLAINT: "complaint_note"
+    } as const;
+
     return {
-        note_type: normalizedType === "CLINICAL" ? "clinical_note" : "admin_note",
+        note_type: noteTypeMap[normalizedType],
         title: null,
         body: resolvedBody,
         status: "open" as const,
