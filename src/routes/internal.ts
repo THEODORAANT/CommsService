@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
 import { pool } from "../db.js";
+import { sendPharmacyRequest } from "../pharmacy.client.js";
 import { processWebhookBatch } from "../webhooks/webhooks.service.js";
 
 export const internalRoutes = Router();
@@ -34,6 +35,25 @@ const updateOrderStatusBodySchema = z.object({
     status: z.enum(["PENDING", "APPROVED", "CANCELLED", "REFUND"]),
     reason: z.string().trim().min(1).optional()
 });
+
+const updateCustomerByEmailPathSchema = z.object({
+    email: z.string().email()
+});
+
+const updateCustomerByEmailBodySchema = z
+    .object({
+        name: z.string().trim().min(1).optional(),
+        dob: z.string().trim().min(1).optional(),
+        phone: z.string().trim().min(1).optional(),
+        gender: z.string().trim().min(1).optional(),
+        address1: z.string().trim().min(1).optional(),
+        city: z.string().trim().min(1).optional(),
+        zip: z.string().trim().min(1).optional(),
+        country: z.string().trim().min(1).optional()
+    })
+    .refine((payload) => Object.keys(payload).length > 0, {
+        message: "At least one field must be provided"
+    });
 
 const lockedStatuses = new Set(["APPROVED", "PROCESSING", "REFUND"]);
 const allowedTransitions: Record<string, Set<string>> = {
@@ -161,5 +181,40 @@ internalRoutes.patch("/api/orders/:orderNumber/status", async (req, res, next) =
         }
     } catch (err) {
         next(err);
+    }
+});
+
+internalRoutes.put("/api/customers/:email", async (req, res, next) => {
+    try {
+        const key = req.header("x-api-key");
+        if (!key || key !== config.pharmacyApiKey) {
+            return res.status(403).json({ error: "forbidden" });
+        }
+
+        const { email } = updateCustomerByEmailPathSchema.parse(req.params);
+        const payload = updateCustomerByEmailBodySchema.parse(req.body);
+
+        const response = await sendPharmacyRequest({
+            tenant_id: config.tenantDefault,
+            operation: "update_customer_by_email",
+            method: "PUT",
+            path: `/api/customers/${encodeURIComponent(email)}`,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            requestBodyForLog: payload
+        });
+
+        if (!response.ok) {
+            return res.status(response.status).json(
+                response.bodyJson ?? {
+                    error: "request_error",
+                    message: `Pharmacy API error: ${response.status}`
+                }
+            );
+        }
+
+        return res.status(200).json(response.bodyJson ?? { success: true });
+    } catch (err) {
+        return next(err);
     }
 });

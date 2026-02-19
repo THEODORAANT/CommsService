@@ -6,7 +6,6 @@ import { q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
-import { config } from "../config.js";
 import { sendPharmacyRequest } from "../pharmacy.client.js";
 
 export const perchMembers = Router();
@@ -69,6 +68,27 @@ type PharmacyCustomerLookupResponse = {
     data?: Record<string, unknown>;
 };
 
+const updateCustomerByEmailPayloadSchema = z
+    .object({
+        name: z.string().trim().min(1).optional(),
+        dob: z.string().trim().min(1).optional(),
+        phone: z.string().trim().min(1).optional(),
+        gender: z.string().trim().min(1).optional(),
+        address1: z.string().trim().min(1).optional(),
+        city: z.string().trim().min(1).optional(),
+        zip: z.string().trim().min(1).optional(),
+        country: z.string().trim().min(1).optional()
+    })
+    .refine((payload) => Object.keys(payload).length > 0, {
+        message: "At least one field must be provided"
+    });
+
+type PharmacyUpdateCustomerResponse = {
+    success: boolean;
+    message?: string;
+    data?: Record<string, unknown>;
+};
+
 async function createPharmacyCustomer(tenant_id: string, payload: {
     name: string;
     email: string;
@@ -120,12 +140,63 @@ async function getPharmacyCustomerByEmail(tenant_id: string, email: string): Pro
     return (resp.bodyJson ?? {}) as PharmacyCustomerLookupResponse;
 }
 
+async function updatePharmacyCustomerByEmail(
+    tenant_id: string,
+    email: string,
+    payload: z.infer<typeof updateCustomerByEmailPayloadSchema>
+): Promise<PharmacyUpdateCustomerResponse> {
+    const resp = await sendPharmacyRequest<PharmacyUpdateCustomerResponse>({
+        tenant_id,
+        operation: "update_customer_by_email",
+        method: "PUT",
+        path: `/api/customers/${encodeURIComponent(email)}`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        requestBodyForLog: payload
+    });
+
+    if (!resp.ok) {
+        const err: any = new Error(`Pharmacy API error: ${resp.status}`);
+        err.status = resp.status;
+        err.body = resp.bodyJson;
+        throw err;
+    }
+
+    return (resp.bodyJson ?? { success: true }) as PharmacyUpdateCustomerResponse;
+}
+
 perchMembers.get(
     "/v1/perch/customers/:email",
     authedHandler(async (req, res) => {
         const email = z.string().email().parse(req.params.email);
         const customer = await getPharmacyCustomerByEmail(req.tenant_id, email);
         res.json(customer);
+    })
+);
+
+perchMembers.put(
+    "/v1/perch/customers/:email",
+    authedHandler(async (req, res) => {
+        const email = z.string().email().parse(req.params.email);
+        const payload = updateCustomerByEmailPayloadSchema.parse(req.body);
+
+        try {
+            const result = await updatePharmacyCustomerByEmail(req.tenant_id, email, payload);
+            res.json(result);
+            return;
+        } catch (err: any) {
+            if (typeof err?.status === "number") {
+                res.status(err.status).json(
+                    err.body ?? {
+                        error: "request_error",
+                        message: err.message
+                    }
+                );
+                return;
+            }
+
+            throw err;
+        }
     })
 );
 
