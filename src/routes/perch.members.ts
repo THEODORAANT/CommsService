@@ -22,14 +22,50 @@ const ActorSchema = z.object({
     display_name: z.string().optional()
 });
 
-const NoteCreateSchema = z.object({
-    note_type: z.enum(["admin_note","clinical_note"]),
+const LegacyNoteCreateSchema = z.object({
+    note_type: z.enum(["admin_note", "clinical_note"]),
     title: z.string().optional().nullable(),
     body: z.string().min(1),
-    status: z.enum(["open","resolved","archived"]).optional(),
+    status: z.enum(["open", "resolved", "archived"]).optional(),
     created_by: ActorSchema,
     external_note_ref: z.string().optional().nullable()
 });
+
+const PharmacyMemberNoteCreateSchema = z
+    .object({
+        email: z.string().email(),
+        body: z.string().trim().optional(),
+        note: z.string().trim().optional(),
+        type: z.enum(["ADMIN", "CLINICAL", "COMPLAINT"]).optional(),
+        author: z.string().trim().optional()
+    })
+    .refine((payload) => Boolean(payload.body?.trim() || payload.note?.trim()), {
+        message: "Either body or note is required"
+    });
+
+const NoteCreateSchema = z.union([LegacyNoteCreateSchema, PharmacyMemberNoteCreateSchema]);
+
+function normalizeMemberNoteInput(input: z.infer<typeof NoteCreateSchema>) {
+    if ("created_by" in input) {
+        return input;
+    }
+
+    const resolvedBody = (input.body?.trim() || input.note?.trim() || "").trim();
+    const normalizedType = input.type ?? "ADMIN";
+
+    return {
+        note_type: normalizedType === "CLINICAL" ? "clinical_note" : "admin_note",
+        title: null,
+        body: resolvedBody,
+        status: "open" as const,
+        created_by: {
+            role: "admin" as const,
+            user_id: undefined,
+            display_name: input.author?.trim() || "Pharmacy"
+        },
+        external_note_ref: null
+    };
+}
 
 const MessageCreateSchema = z.object({
     channel: z.enum(["admin_patient","pharmacist_patient"]),
@@ -369,7 +405,8 @@ perchMembers.post(
         const memberID = Number(req.params.memberID);
         const idem = req.header("Idempotency-Key") || undefined;
 
-    const body = NoteCreateSchema.parse(req.body);
+    const parsedBody = NoteCreateSchema.parse(req.body);
+    const body = normalizeMemberNoteInput(parsedBody);
     const endpoint = "/v1/perch/members/:memberID/notes";
 
     const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { memberID, ...body }, async () => {
