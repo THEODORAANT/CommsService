@@ -516,6 +516,20 @@ async function buildPharmacyPatientNotePayload(tenant_id: string, payloadObj: an
 
     const n = noteRows[0];
 
+    if (n.external_note_ref) {
+        return {
+            order_number: null,
+            email: null,
+            body: String(n.body),
+            external_note_ref: String(n.external_note_ref),
+            type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
+            author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
+            note_type: n.note_type,
+            should_send_customer_note: false,
+            should_forward_to_pharmacy: false
+        };
+    }
+
     if (!n.email) {
         const err: any = new Error("Member email is required to create customer note in pharmacy.");
         err.status = 422;
@@ -586,8 +600,21 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
 
     const n = noteRows[0];
 
+    if (n.external_note_ref) {
+        return {
+            order_number: null,
+            email: null,
+            body: String(n.body),
+            external_note_ref: String(n.external_note_ref),
+            type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
+            author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
+            note_type: n.note_type,
+            should_send_customer_note: false,
+            should_forward_to_pharmacy: false
+        };
+    }
+
     const isEscalatedClinicalReview = Number(orderRows[0].escalate_clinical_review ?? 0) === 1;
-    const isPatientNote = String(n.created_by_role) === "patient";
     const isOrderTypeRelated = String(n.note_type) === "admin_note" || String(n.note_type) === "clinical_note";
     const shouldForwardToPharmacy = isEscalatedClinicalReview || isOrderTypeRelated;
 
@@ -606,15 +633,7 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     }
 
     const orderNumber = orderRows[0].pharmacy_order_ref as string | null;
-    const shouldSendCustomerNote = isEscalatedClinicalReview && isPatientNote;
-
-    if (shouldSendCustomerNote && !n.email) {
-        const err: any = new Error("Member email is required to create customer note in pharmacy.");
-        err.status = 422;
-        throw err;
-    }
-
-    if (!shouldSendCustomerNote && !orderNumber) {
+    if (!orderNumber) {
         const err: any = new Error(`Missing pharmacy_order_ref for orderID=${orderID}.`);
         err.status = 422;
         throw err;
@@ -622,13 +641,13 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
 
     return {
         order_number: String(orderNumber),
-        email: n.email ? String(n.email) : null,
+        email: null,
         body: String(n.body),
         external_note_ref: n.external_note_ref ? String(n.external_note_ref) : null,
         type: pharmacyNoteTypeMap[n.note_type] ?? "ADMIN",
         author: n.created_by_display_name || n.created_by_user_id || n.created_by_role || undefined,
         note_type: n.note_type,
-        should_send_customer_note: shouldSendCustomerNote,
+        should_send_customer_note: false,
         should_forward_to_pharmacy: true
     };
 }
