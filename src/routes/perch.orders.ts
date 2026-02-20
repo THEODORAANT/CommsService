@@ -416,7 +416,7 @@ perchOrders.post(
             }
             const memberID = Number(rows[0].memberID);
             const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
-            const shouldForwardToPharmacy = isEscalatedClinicalReview || body.note_type === "admin_note" || body.note_type === "clinical_note";
+            const shouldForwardToPharmacy = true;//isEscalatedClinicalReview || body.note_type === "admin_note" || body.note_type === "clinical_note";
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";
 
@@ -424,11 +424,11 @@ perchOrders.post(
                 `INSERT INTO notes(
         note_id, tenant_id, scope, memberID, orderID,
         note_type, title, body, status,
-        created_by_role, created_by_user_id, created_by_display_name, external_note_ref
+        created_by_role, created_by_user_id, created_by_display_name, external_note_ref,escalate_clinical_review
       ) VALUES (
         :note_id, :tenant_id, 'order', :memberID, :orderID,
         :note_type, :title, :body, :status,
-        :c_role, :c_uid, :c_name, :ext
+        :c_role, :c_uid, :c_name, :ext,:isEscalatedClinicalReview
       )`,
                 {
                     note_id,
@@ -442,7 +442,8 @@ perchOrders.post(
                     c_role: body.created_by.role,
                     c_uid: body.created_by.user_id ?? null,
                     c_name: body.created_by.display_name ?? null,
-                    ext: body.external_note_ref ?? null
+                    ext: body.external_note_ref ?? null,
+                    isEscalatedClinicalReview
                 }
             );
 
