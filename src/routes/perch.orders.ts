@@ -8,7 +8,6 @@ import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
 import { config } from "../config.js";
 import { sendPharmacyRequest } from "../pharmacy.client.js";
-import { normalizeForwardedNoteBody } from "../utils/note-body.js";
 
 export const perchOrders = Router();
 
@@ -80,128 +79,12 @@ type PharmacyOrderCreateResponse = {
     orderNumber?: string;
 };
 
-type PharmacyOrderNoteResponse = {
-    success: boolean;
-    message?: string;
-    note?: {
-        _id?: string;
-        content?: string;
-        type?: string;
-        author?: string;
-        createdAt?: string;
-    };
-    pharmacy_note_id?: string;
-    thread_id?: string;
-};
-
 type PharmacyOrderStatusResponse = {
     success: boolean;
     orderNumber?: string;
     status?: string;
     message?: string;
 };
-
-
-
-async function updateNoteExternalRefs(
-    tenant_id: string,
-    note_id: string,
-    external_note_ref: string,
-    external_thread_ref: string | null
-) {
-    try {
-        await q(
-            `UPDATE notes
-SET external_note_ref=:external_note_ref,
-    external_thread_ref=:external_thread_ref
-WHERE tenant_id=:tenant_id AND note_id=:note_id`,
-            { tenant_id, note_id, external_note_ref, external_thread_ref }
-        );
-    } catch (err: any) {
-        const missingThreadColumn =
-            err?.code === "ER_BAD_FIELD_ERROR" &&
-            String(err?.sqlMessage ?? err?.message ?? "").includes("external_thread_ref");
-        if (!missingThreadColumn) throw err;
-
-        await q(
-            `UPDATE notes
-SET external_note_ref=:external_note_ref
-WHERE tenant_id=:tenant_id AND note_id=:note_id`,
-            { tenant_id, note_id, external_note_ref }
-        );
-    }
-}
-
-const pharmacyNoteTypeMap: Record<string, string> = {
-    admin_note: "ADMIN",
-    clinical_note: "CLINICAL",
-    complaint_note: "COMPLAINT",
-    complaint: "COMPLAINT"
-};
-
-async function createPharmacyCustomerNote(tenant_id: string, payload: {
-    email: string;
-    body?: string;
-    note?: string;
-    type?: string;
-    author?: string | null;
-}): Promise<PharmacyOrderNoteResponse> {
-    const resolvedBody = normalizeForwardedNoteBody(payload.body ?? payload.note ?? "");
-    if (!resolvedBody) {
-        throw new Error("Pharmacy customer note requires either body or note.");
-    }
-
-    const requestPayload = {
-        email: payload.email,
-        body: resolvedBody,
-        type: payload.type ?? "ADMIN",
-        author: payload.author ?? undefined
-    };
-    const resp = await sendPharmacyRequest<PharmacyOrderNoteResponse>({
-        tenant_id,
-        operation: "create_customer_note",
-        method: "POST",
-        path: "/api/customers/notes",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestPayload),
-        requestBodyForLog: requestPayload
-    });
-
-    if (!resp.ok) {
-        throw new Error(`Pharmacy API error: ${resp.status}`);
-    }
-
-    return (resp.bodyJson ?? {}) as PharmacyOrderNoteResponse;
-}
-
-
-async function createPharmacyOrderNote(tenant_id: string, payload: {
-    orderNumber: string;
-    body: string;
-    type: string;
-    author?: string | null;
-}): Promise<PharmacyOrderNoteResponse> {
-    const requestPayload = {
-        body: normalizeForwardedNoteBody(payload.body),
-        type: payload.type,
-        author: payload.author ?? undefined
-    };
-    const resp = await sendPharmacyRequest<PharmacyOrderNoteResponse>({
-        tenant_id,
-        operation: "create_order_note",
-        method: "POST",
-        path: `/api/orders/${payload.orderNumber}/notes`,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestPayload),
-        requestBodyForLog: requestPayload
-    });
-
-    if (!resp.ok) {
-        throw new Error(`Pharmacy API error: ${resp.status}`);
-    }
-
-    return (resp.bodyJson ?? {}) as PharmacyOrderNoteResponse;
-}
 
 async function createPharmacyOrder(tenant_id: string, payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
     const resp = await sendPharmacyRequest<PharmacyOrderCreateResponse>({
@@ -521,9 +404,8 @@ perchOrders.post(
                 ? "o.escalate_clinical_review"
                 : "0 AS escalate_clinical_review";
             const rows = await q<any>(
-                `SELECT o.memberID, o.pharmacy_order_ref, ${escalateClinicalReviewSelect}, m.email
+                `SELECT o.memberID, ${escalateClinicalReviewSelect}
                  FROM orders o
-                 LEFT JOIN members m ON m.tenant_id=o.tenant_id AND m.memberID=o.memberID
                  WHERE o.tenant_id=:tenant_id AND o.orderID=:orderID`,
                 { tenant_id, orderID }
             );
@@ -533,12 +415,8 @@ perchOrders.post(
                 throw err;
             }
             const memberID = Number(rows[0].memberID);
-            const pharmacyOrderRef = rows[0].pharmacy_order_ref as string | null;
-            const memberEmail = rows[0].email as string | null;
             const isEscalatedClinicalReview = Number(rows[0].escalate_clinical_review ?? 0) === 1;
-            const isPatientNote = body.created_by.role === "patient";
             const shouldForwardToPharmacy = isEscalatedClinicalReview || body.note_type === "admin_note" || body.note_type === "clinical_note";
-            const shouldSendCustomerNote = isPatientNote && isEscalatedClinicalReview;
             const note_id = crypto.randomUUID();
             const status = body.status ?? "open";
 
@@ -570,9 +448,6 @@ perchOrders.post(
 
             await emitEvent(tenant_id, "note.created", { note_id, memberID, orderID, scope: "order" });
 
-            let pharmacyNoteId: string | null = null;
-            let pharmacyThreadId: string | null = null;
-            const noteAuthor = body.created_by.display_name ?? body.created_by.user_id ?? body.created_by.role;
             if (!shouldForwardToPharmacy) {
                 return {
                     note_id,
@@ -591,44 +466,6 @@ perchOrders.post(
                 };
             }
 
-            if (shouldSendCustomerNote) {
-                if (!memberEmail) {
-                    const err: any = new Error("Member email is required to create a customer note in pharmacy.");
-                    err.status = 422;
-                    throw err;
-                }
-
-                const pharmacyResponse = await createPharmacyCustomerNote(tenant_id, {
-                    email: memberEmail,
-                    body: body.body,
-                    type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
-                    author: noteAuthor
-                });
-
-                pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
-                pharmacyThreadId = pharmacyResponse.thread_id ?? null;
-            } else {
-                if (!pharmacyOrderRef) {
-                    const err: any = new Error("Order is missing pharmacy_order_ref. Link the order with pharmacy_order_ref first.");
-                    err.status = 422;
-                    throw err;
-                }
-
-                const pharmacyResponse = await createPharmacyOrderNote(tenant_id, {
-                    orderNumber: pharmacyOrderRef,
-                    body: body.body,
-                    type: pharmacyNoteTypeMap[body.note_type] ?? "ADMIN",
-                    author: noteAuthor
-                });
-
-                pharmacyNoteId = pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
-                pharmacyThreadId = pharmacyResponse.thread_id ?? null;
-            }
-
-            if (pharmacyNoteId) {
-                await updateNoteExternalRefs(tenant_id, note_id, pharmacyNoteId, pharmacyThreadId);
-            }
-
             return {
                 note_id,
                 thread_root_id: note_id,
@@ -638,8 +475,8 @@ perchOrders.post(
                 note_type: body.note_type,
                 status,
                 created_at: new Date().toISOString(),
-                pharmacy_note_id: pharmacyNoteId,
-                pharmacy_thread_id: pharmacyThreadId
+                pharmacy_note_id: null,
+                pharmacy_thread_id: null
             };
         });
 
