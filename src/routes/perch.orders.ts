@@ -86,6 +86,75 @@ type PharmacyOrderStatusResponse = {
     message?: string;
 };
 
+async function ensureMemberExistsByCustomerId(tenant_id: string, customerId: string): Promise<number> {
+    const existingRows = await q<{ memberID: number }>(
+        `SELECT memberID
+         FROM members
+         WHERE tenant_id=:tenant_id
+           AND pharmacy_patient_ref=:customerId
+         LIMIT 1`,
+        { tenant_id, customerId }
+    );
+
+    if (existingRows.length > 0) {
+        return Number(existingRows[0].memberID);
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const connection = await pool.getConnection();
+
+        try {
+            await connection.beginTransaction();
+
+            const [memberRows] = await connection.query<any[]>(
+                `SELECT memberID
+                 FROM members
+                 WHERE tenant_id=:tenant_id
+                   AND pharmacy_patient_ref=:customerId
+                 LIMIT 1
+                 FOR UPDATE`,
+                { tenant_id, customerId }
+            );
+
+            if (memberRows.length > 0) {
+                await connection.commit();
+                return Number(memberRows[0].memberID);
+            }
+
+            const [maxRows] = await connection.query<any[]>(
+                `SELECT COALESCE(MAX(memberID), 0) AS maxMemberID
+                 FROM members
+                 WHERE tenant_id=:tenant_id
+                 FOR UPDATE`,
+                { tenant_id }
+            );
+
+            const nextMemberID = Number(maxRows[0]?.maxMemberID ?? 0) + 1;
+
+            await connection.query(
+                `INSERT INTO members(tenant_id, memberID, pharmacy_patient_ref)
+                 VALUES (:tenant_id, :memberID, :pharmacy_patient_ref)`,
+                { tenant_id, memberID: nextMemberID, pharmacy_patient_ref: customerId }
+            );
+
+            await connection.commit();
+            return nextMemberID;
+        } catch (err: any) {
+            await connection.rollback();
+
+            if (err?.code === "ER_DUP_ENTRY") {
+                continue;
+            }
+
+            throw err;
+        } finally {
+            connection.release();
+        }
+    }
+
+    throw new Error("Failed to create member for customerId");
+}
+
 async function createPharmacyOrder(tenant_id: string, payload: z.infer<typeof OrderCreateSchema>): Promise<string> {
     const resp = await sendPharmacyRequest<PharmacyOrderCreateResponse>({
         tenant_id,
@@ -143,16 +212,7 @@ perchOrders.post(
         const endpoint = "/v1/perch/orders/:orderID/create";
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
-            const memberRows = await q<any>(
-                `SELECT memberID FROM members WHERE tenant_id=:tenant_id AND pharmacy_patient_ref=:customerId`,
-                { tenant_id, customerId: body.customerId }
-            );
-            if (!memberRows.length) {
-                const err: any = new Error("Member not found for customerId. Link member with pharmacy_patient_ref first.");
-                err.status = 422;
-                throw err;
-            }
-            const memberID = Number(memberRows[0].memberID);
+            const memberID = await ensureMemberExistsByCustomerId(tenant_id, body.customerId);
 
             const pharmacyOrderNumber = await createPharmacyOrder(tenant_id, body);
 
