@@ -2,7 +2,7 @@ import { NextFunction, Request, Response, Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
 //import fetch from "node-fetch";
-import { q } from "../db.js";
+import { pool, q } from "../db.js";
 import { withIdempotency } from "../idempotency.js";
 import { emitEvent } from "../webhooks/webhooks.service.js";
 import type { AuthedRequest } from "../auth.js";
@@ -107,7 +107,12 @@ type PharmacyCustomerResponse = {
 type PharmacyCustomerLookupResponse = {
     success: boolean;
     message?: string;
-    data?: Record<string, unknown>;
+    customer?: {
+        customerId?: string;
+        name?: string;
+        email?: string;
+        phone?: string;
+    };
 };
 
 const updateCustomerByEmailPayloadSchema = z
@@ -182,6 +187,124 @@ async function getPharmacyCustomerByEmail(tenant_id: string, email: string): Pro
     return (resp.bodyJson ?? {}) as PharmacyCustomerLookupResponse;
 }
 
+function splitName(fullName?: string): { first_name: string | null; last_name: string | null } {
+    const value = fullName?.trim();
+    if (!value) {
+        return { first_name: null, last_name: null };
+    }
+
+    const parts = value.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) {
+        return { first_name: parts[0], last_name: null };
+    }
+
+    return {
+        first_name: parts[0],
+        last_name: parts.slice(1).join(" ")
+    };
+}
+
+async function ensureMemberExistsByEmail(
+    tenant_id: string,
+    fallbackEmail: string,
+    customer?: PharmacyCustomerLookupResponse["customer"]
+): Promise<void> {
+    const email = customer?.email ?? fallbackEmail;
+    const { first_name, last_name } = splitName(customer?.name);
+    const phone = customer?.phone ?? null;
+    const pharmacy_patient_ref = customer?.customerId ?? null;
+
+    const existingByEmail = await q<{ memberID: number }>(
+        `SELECT memberID
+         FROM members
+         WHERE tenant_id = :tenant_id
+           AND email = :email
+         LIMIT 1`,
+        { tenant_id, email }
+    );
+
+    if (existingByEmail.length > 0) {
+        await q(
+            `UPDATE members
+             SET first_name = COALESCE(:first_name, first_name),
+                 last_name = COALESCE(:last_name, last_name),
+                 phone = COALESCE(:phone, phone),
+                 pharmacy_patient_ref = COALESCE(:pharmacy_patient_ref, pharmacy_patient_ref),
+                 updated_at = CURRENT_TIMESTAMP(3)
+             WHERE tenant_id = :tenant_id
+               AND email = :email`,
+            { tenant_id, email, first_name, last_name, phone, pharmacy_patient_ref }
+        );
+
+        return;
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const connection = await pool.getConnection();
+
+        try {
+            await connection.beginTransaction();
+
+            const [rows] = await connection.query(
+                `SELECT memberID
+                 FROM members
+                 WHERE tenant_id = :tenant_id
+                   AND email = :email
+                 LIMIT 1`,
+                { tenant_id, email }
+            );
+
+            if ((rows as any[]).length > 0) {
+                await connection.query(
+                    `UPDATE members
+                     SET first_name = COALESCE(:first_name, first_name),
+                         last_name = COALESCE(:last_name, last_name),
+                         phone = COALESCE(:phone, phone),
+                         pharmacy_patient_ref = COALESCE(:pharmacy_patient_ref, pharmacy_patient_ref),
+                         updated_at = CURRENT_TIMESTAMP(3)
+                     WHERE tenant_id = :tenant_id
+                       AND email = :email`,
+                    { tenant_id, email, first_name, last_name, phone, pharmacy_patient_ref }
+                );
+
+                await connection.commit();
+                return;
+            }
+
+            const [maxRows] = await connection.query(
+                `SELECT COALESCE(MAX(memberID), 0) AS maxMemberID
+                 FROM members
+                 WHERE tenant_id = :tenant_id
+                 FOR UPDATE`,
+                { tenant_id }
+            );
+
+            const nextMemberID = Number((maxRows as Array<{ maxMemberID: number }>)[0]?.maxMemberID ?? 0) + 1;
+
+            await connection.query(
+                `INSERT INTO members(tenant_id, memberID, email, first_name, last_name, phone, pharmacy_patient_ref)
+                 VALUES (:tenant_id, :memberID, :email, :first_name, :last_name, :phone, :pharmacy_patient_ref)`,
+                { tenant_id, memberID: nextMemberID, email, first_name, last_name, phone, pharmacy_patient_ref }
+            );
+
+            await connection.commit();
+            return;
+        } catch (err: any) {
+            await connection.rollback();
+
+            if (err?.code === "ER_DUP_ENTRY") {
+                continue;
+            }
+
+            throw err;
+        } finally {
+            connection.release();
+        }
+    }
+
+    throw new Error("Failed to create member record for customer email");
+}
+
 async function updatePharmacyCustomerByEmail(
     tenant_id: string,
     email: string,
@@ -212,6 +335,7 @@ perchMembers.get(
     authedHandler(async (req, res) => {
         const email = z.string().email().parse(req.params.email);
         const customer = await getPharmacyCustomerByEmail(req.tenant_id, email);
+        await ensureMemberExistsByEmail(req.tenant_id, email, customer.customer);
         res.json(customer);
     })
 );
