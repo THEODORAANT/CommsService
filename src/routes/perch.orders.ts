@@ -182,8 +182,12 @@ async function createPharmacyOrder(tenant_id: string, payload: z.infer<typeof Or
 async function updatePharmacyOrderStatus(tenant_id: string, payload: {
     orderNumber: string;
     status: z.infer<typeof UpdateOrderStatusSchema>["status"];
+    reason?: string;
 }): Promise<PharmacyOrderStatusResponse> {
-    const requestPayload = { status: payload.status };
+    const requestPayload = {
+        status: payload.status,
+        ...(payload.reason ? { reason: payload.reason } : {})
+    };
     const resp = await sendPharmacyRequest<PharmacyOrderStatusResponse>({
         tenant_id,
         operation: "update_order_status",
@@ -354,7 +358,8 @@ perchOrders.post(
 
             await updatePharmacyOrderStatus(tenant_id, {
                 orderNumber: pharmacyOrderRef,
-                status: body.status
+                status: body.status,
+                reason: body.reason
             });
 
             if (body.status === "PENDING") {
