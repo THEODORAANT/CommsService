@@ -216,6 +216,19 @@ perchOrders.post(
         const endpoint = "/v1/perch/orders/:orderID/create";
 
         const { replayed, result } = await withIdempotency(tenant_id, endpoint, idem, { orderID, ...body }, async () => {
+            const existingOrderRows = await q<{ pharmacy_order_ref: string | null }>(
+                `SELECT pharmacy_order_ref
+                 FROM orders
+                 WHERE tenant_id=:tenant_id AND orderID=:orderID
+                 LIMIT 1`,
+                { tenant_id, orderID }
+            );
+
+            const existingPharmacyOrderRef = existingOrderRows[0]?.pharmacy_order_ref ?? null;
+            if (existingPharmacyOrderRef) {
+                return { ok: true, orderNumber: existingPharmacyOrderRef, duplicatePrevented: true };
+            }
+
             const memberID = await ensureMemberExistsByCustomerId(tenant_id, body.customerId);
 
             const pharmacyOrderNumber = await createPharmacyOrder(tenant_id, body);
