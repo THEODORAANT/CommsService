@@ -64,7 +64,13 @@ const OrderCreateSchema = z.object({
 
 const UpdateOrderStatusSchema = z.object({
     status: z.enum(["PENDING", "APPROVED", "CANCELLED", "REFUND"]),
-    reason: z.string().trim().min(1).optional()
+    reason: z.string().trim().min(1).optional(),
+    items: z.array(
+        z.object({
+            productId: z.string().trim().min(1),
+            quantity: z.number().int().positive()
+        })
+    ).optional()
 });
 
 const orderLockedStatuses = new Set(["APPROVED", "PROCESSING", "REFUND"]);
@@ -183,10 +189,12 @@ async function updatePharmacyOrderStatus(tenant_id: string, payload: {
     orderNumber: string;
     status: z.infer<typeof UpdateOrderStatusSchema>["status"];
     reason?: string;
+    items?: z.infer<typeof UpdateOrderStatusSchema>["items"];
 }): Promise<PharmacyOrderStatusResponse> {
     const requestPayload = {
         status: payload.status,
-        ...(payload.reason ? { reason: payload.reason } : {})
+        ...(payload.reason ? { reason: payload.reason } : {}),
+        ...(payload.items ? { items: payload.items } : {})
     };
     const resp = await sendPharmacyRequest<PharmacyOrderStatusResponse>({
         tenant_id,
@@ -315,6 +323,12 @@ perchOrders.post(
             throw err;
         }
 
+        if (body.items && body.status !== "PENDING") {
+            const err: any = new Error("items can only be provided when status is PENDING");
+            err.status = 400;
+            throw err;
+        }
+
         const connection = await pool.getConnection();
         try {
             await connection.beginTransaction();
@@ -372,7 +386,8 @@ perchOrders.post(
             await updatePharmacyOrderStatus(tenant_id, {
                 orderNumber: pharmacyOrderRef,
                 status: body.status,
-                reason: body.reason
+                reason: body.reason,
+                items: body.items
             });
 
             if (body.status === "PENDING") {
