@@ -443,11 +443,11 @@ async function buildPharmacyNoteReplyPayload(tenant_id: string, payloadObj: any)
         { tenant_id, note_id }
     );
 
-    if (!noteRows.length || noteRows[0].scope !== "order") {
+   /* if (!noteRows.length || noteRows[0].scope !== "order") {
         const err: any = new Error("Pharmacy requires order-scoped notes for note.reply.created events");
         err.status = 400;
         throw err;
-    }
+    }*/
 
     const pharmacy_note_id = noteRows[0].external_note_ref as string | null;
     if (!pharmacy_note_id) {
@@ -561,11 +561,11 @@ async function buildPharmacyOrderNotePayload(tenant_id: string, payloadObj: any)
     const orderID = payloadObj?.data?.orderID ?? null;
     const scope = resolvePharmacyNoteScope(payloadObj?.data);
 
-    if (!note_id || !memberID || !orderID || scope !== "order") {
+   /* if (!note_id || !memberID || !orderID || scope !== "order") {
         const err: any = new Error("Pharmacy requires order-scoped note.created events with orderID");
         err.status = 400;
         throw err;
-    }
+    }*/
 
     const hasEscalateClinicalReviewColumn = await ordersHasEscalateClinicalReviewColumn();
     const escalateClinicalReviewSelect = hasEscalateClinicalReviewColumn
