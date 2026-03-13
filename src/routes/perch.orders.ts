@@ -540,7 +540,7 @@ perchOrders.post(
                 }
             );
 
-            //await emitEvent(tenant_id, "note.created", { note_id, memberID, orderID, scope: "order" });
+            await emitEvent(tenant_id, "note.created", { note_id, memberID, orderID, scope: "order" });
 
             if (!shouldForwardToPharmacy) {
                 return {

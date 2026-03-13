@@ -65,9 +65,28 @@ WHERE tenant_id=:tenant_id AND note_id=:note_id`,
 
 function getPharmacyNoteId(pharmacyResponse: {
     pharmacy_note_id?: string;
-    note?: { _id?: string };
+    pharmacyNoteId?: string;
+    note_id?: string;
+    noteId?: string;
+    note?: { _id?: string; id?: string };
 }): string | null {
-    return pharmacyResponse.pharmacy_note_id ?? pharmacyResponse.note?._id ?? null;
+    return (
+        pharmacyResponse.pharmacy_note_id ??
+        pharmacyResponse.pharmacyNoteId ??
+        pharmacyResponse.note_id ??
+        pharmacyResponse.noteId ??
+        pharmacyResponse.note?._id ??
+        pharmacyResponse.note?.id ??
+        null
+    );
+}
+
+function getPharmacyThreadId(pharmacyResponse: {
+    thread_id?: string;
+    threadId?: string;
+    thread?: { _id?: string; id?: string };
+}): string | null {
+    return pharmacyResponse.thread_id ?? pharmacyResponse.threadId ?? pharmacyResponse.thread?._id ?? pharmacyResponse.thread?.id ?? null;
 }
 
 export async function emitEvent(tenant_id: string, event_type: string, data: any) {
@@ -334,7 +353,7 @@ WHERE d.delivery_id=:delivery_id`,
 
                         failureStage = "update_note_external_refs";
                         const pharmacyNoteId = getPharmacyNoteId(pharmacyResp);
-                        const pharmacyThreadId = pharmacyResp.thread_id ?? null;
+                        const pharmacyThreadId = getPharmacyThreadId(pharmacyResp);
                         if (pharmacyNoteId) {
                             await updateNoteExternalRefs(d.tenant_id, payloadObj?.data?.note_id, pharmacyNoteId, pharmacyThreadId);
                         }
