@@ -40,6 +40,8 @@ const OrderLinkSchema = z.object({
 
 const OrderCreateSchema = z.object({
     customerId: z.string().min(1),
+    originOrderId: z.string().optional(),
+    stripePaymentId: z.string().optional(),
     items: z.array(
         z.object({
             productId: z.string().min(1),
@@ -53,6 +55,10 @@ const OrderCreateSchema = z.object({
         postCode: z.string().min(1),
         country: z.string().min(1)
     }),
+    subtotal: z.number().optional(),
+    deliveryCost: z.number().optional(),
+    total: z.number().optional(),
+    courierService: z.enum(["SEB", "TPN24"]).optional(),
     assessment: z.array(
         z.object({
             question: z.string().min(1),
